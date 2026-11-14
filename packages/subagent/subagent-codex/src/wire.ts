@@ -226,7 +226,11 @@ export class CodexAppServerWire {
     output: Writable,
     private readonly permissionMode: CodexPermissionMode,
     private readonly model?: string,
+    private readonly sandbox?: 'read-only',
   ) {
+    if (sandbox !== undefined && permissionMode !== 'never') {
+      throw new Error('subagent-codex: explicit read-only sandbox requires permissionMode never')
+    }
     this.transport = new JsonRpcLineTransport(input, output)
     // Fatal protocol state can arrive after the current guarded operation has
     // already settled. Keep the shared rejection observed without inserting
@@ -292,6 +296,7 @@ export class CodexAppServerWire {
       ephemeral: true,
       ...this.model === undefined ? {} : { model: this.model },
       ...THREAD_PERMISSION_PARAMS[this.permissionMode],
+      ...this.sandbox === undefined ? {} : { sandbox: this.sandbox },
     }, signal), signal), 'thread/start response')
     const thread = object(response.thread, 'thread/start thread')
     const id = string(thread.id, 'thread/start thread id')

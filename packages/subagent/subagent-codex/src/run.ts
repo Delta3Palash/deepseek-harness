@@ -144,6 +144,8 @@ export interface CodexRunSpec {
   readonly model?: string
   /** Profile-selected native non-interactive permission mode. */
   readonly permissionMode: CodexPermissionMode
+  /** Explicit native sandbox restriction, valid only with the never approval mode. */
+  readonly sandbox?: 'read-only'
   /** Explicit deployment/test environment layered after the shared scrub. */
   readonly env: Record<string, string>
   /** Subprocess termination grace passed to the shared managed-range owner. */
@@ -226,6 +228,9 @@ export async function startCodexRun(
   request: SubagentStartRequest,
   spec: CodexRunSpec,
 ): Promise<SubagentRun> {
+  if (spec.sandbox !== undefined && spec.permissionMode !== 'never') {
+    throw new Error('subagent-codex: explicit read-only sandbox requires permissionMode never')
+  }
   const texts = textTask(request.prompt)
   if (request.signal.aborted) {
     throw new Error('subagent-codex: request was aborted before app-server startup')
@@ -252,6 +257,7 @@ export async function startCodexRun(
     child.stdin as NonNullable<SubprocessHandle['stdin']>,
     spec.permissionMode,
     spec.model,
+    spec.sandbox,
   )
   const onStderr = (chunk: Buffer | string): void => {
     const bytes = typeof chunk === 'string' ? Buffer.from(chunk) : chunk

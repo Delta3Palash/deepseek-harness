@@ -43,6 +43,7 @@ kind: "package-bundle"
 | `model` | Codex 原生设置 | 为本提供方实例的每个线程固定的可选非空模型名称；省略时不发送 app-server 覆盖 |
 | `env` | `{}` | 叠加在已清理凭据的父环境之上的显式子进程环境 |
 | `permissionMode` | `never` | 为本提供方实例的每个线程固定的原生非交互审批与沙箱模式 |
+| `sandbox` | Codex 原生设置 | 可选的 `read-only` 限制，显式发送至 `thread/start`；要求 `permissionMode: never` |
 | `disposeGraceMs` | `3000` | 共享 managed-range owner 各终止层级之间的宽限 |
 
 | `permissionMode` 值 | `thread/start` 字段 | 原生行为 |
@@ -52,6 +53,8 @@ kind: "package-bundle"
 | `dangerously-bypass-approvals-and-sandbox` | `approvalPolicy: never`、`sandbox: danger-full-access` | 跳过审批与 sandbox；必须显式选择该值 |
 
 生成的[配置目录](../../../docs/config-catalog.zh.md#deepseek-aidsh-subagent-codex)是每个受支持字段及其 JSDoc 的穷尽式真源。已配置的 `model` 会原样传给每个临时 `thread/start`；省略时保留原生模型选择。提供方不会发现模型、改写别名、选择 `modelProvider` 或 `serviceTier`，也不会设置 fallback。具有凭证特征的环境变量会在显式 `env` 覆盖生效前被移除，因此供子进程使用的 API 密钥必须在该配置中显式提供。
+
+审查任务可同时设置 `sandbox: read-only` 和 `permissionMode: never`。适配器在原生线程请求中显式发送限制，不依赖继承的 Codex 配置。与其他任一权限模式组合时，会在启动子进程前拒绝。省略该字段时保留现有权限模式行为。原生沙箱限制约束受支持的本地工具；单独配置的外部工具仍需部署策略约束。
 
 <a id="exposing-the-tool"></a>
 ### 暴露工具

@@ -18,6 +18,7 @@
       config:
         providerName: codex-primary
         model: codex-primary-model
+        sandbox: read-only
 
     - id: subagent-codex-secondary
       name: '@deepseek-ai/dsh-subagent-codex'

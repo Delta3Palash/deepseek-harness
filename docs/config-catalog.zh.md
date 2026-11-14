@@ -3878,6 +3878,8 @@ export interface Config {
   env?: Record<string, string>
   /** Native non-interactive permission mode fixed for this Provider instance. */
   permissionMode?: CodexPermissionMode
+  /** Explicit read-only native sandbox; requires permissionMode never. Omission preserves native defaults. */
+  sandbox?: 'read-only'
   /** Grace in milliseconds between app-server managed-range termination tiers. */
   disposeGraceMs?: number
 }

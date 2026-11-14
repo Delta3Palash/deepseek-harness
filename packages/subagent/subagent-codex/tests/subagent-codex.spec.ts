@@ -591,6 +591,9 @@ describe('task admission and package contracts', () => {
     expect(codex.Config({ model: 'gpt-codex' }).model).toBe('gpt-codex')
     expect(() => codex.Config({ model: '' })).toThrow()
     expect(codex.Config({}).permissionMode).toBe(DEFAULT_CODEX_PERMISSION_MODE)
+    expect(codex.Config({}).sandbox).toBeUndefined()
+    expect(codex.Config({ sandbox: 'read-only' }).sandbox).toBe('read-only')
+    expect(() => codex.Config({ sandbox: 'danger-full-access' } as never)).toThrow()
     for (const permissionMode of CODEX_PERMISSION_MODES) {
       expect(codex.Config({ permissionMode }).permissionMode).toBe(permissionMode)
     }
@@ -599,7 +602,42 @@ describe('task admission and package contracts', () => {
     }
   })
 
-  it('resolves the safe permission default when apply is called directly', async () => {
+  it.each(['approve-for-me', 'dangerously-bypass-approvals-and-sandbox'] as const)(
+    'refuses a read-only sandbox combined with %s before provider registration',
+    async (permissionMode) => {
+      const ctx = new Context()
+      expect(() => { codex.apply(ctx, { permissionMode, sandbox: 'read-only' }) })
+        .toThrow('explicit read-only sandbox requires permissionMode never')
+      const child = fakeChild()
+      expect(() => new CodexAppServerWire(
+        child.handle.stdout!, child.handle.stdin!, permissionMode, undefined, 'read-only',
+      )).toThrow('explicit read-only sandbox requires permissionMode never')
+      const spawn = vi.fn(() => child.handle)
+      await expect(startCodexRun(request(), runSpec(child, { permissionMode, sandbox: 'read-only', spawn })))
+        .rejects.toThrow('explicit read-only sandbox requires permissionMode never')
+      expect(spawn).not.toHaveBeenCalled()
+      await ctx.fiber.dispose()
+    },
+  )
+
+  it('sends a read-only sandbox with never approval to the native thread', async () => {
+    const child = fakeChild()
+    const wire = new CodexAppServerWire(
+      child.handle.stdout!, child.handle.stdin!, 'never', 'review-model', 'read-only',
+    )
+    wire.start()
+    const starting = wire.startThread('/review-workspace', new AbortController().signal)
+    const threadStart = await child.peer.nextMethod('thread/start')
+    expect(threadStart.params).toEqual({
+      cwd: '/review-workspace', ephemeral: true, model: 'review-model',
+      approvalPolicy: 'never', sandbox: 'read-only',
+    })
+    child.peer.respond(threadStart, { thread: { id: 'read-only-review', ephemeral: true } })
+    await starting
+    wire.close()
+  })
+
+  it.each([undefined, 'read-only'] as const)('resolves safe approval and forwards sandbox %s through the provider', async (sandbox) => {
     const ctx = new Context()
     await ctx.plugin(SessionProjectionRegistry)
     await mountWorkingDirectoryFixture(ctx)
@@ -607,7 +645,7 @@ describe('task admission and package contracts', () => {
     await ctx.plugin(LocalSubprocessRuntime)
     const child = fakeChild()
     vi.spyOn(ctx.subprocess, 'spawn').mockReturnValue(child.handle)
-    codex.apply(ctx, { env: {}, disposeGraceMs: 3_000 })
+    codex.apply(ctx, { env: {}, disposeGraceMs: 3_000, ...sandbox === undefined ? {} : { sandbox } })
     expect(ctx.subagents.getProvider('codex')).toBeDefined()
     const starting = startExternalActivation(ctx, 'codex', request())
     const initialize = await child.peer.nextMethod('initialize')
@@ -615,6 +653,8 @@ describe('task admission and package contracts', () => {
     await child.peer.nextMethod('initialized')
     const threadStart = await child.peer.nextMethod('thread/start')
     expect(threadStart.params).not.toHaveProperty('model')
+    if (sandbox === undefined) expect(threadStart.params).not.toHaveProperty('sandbox')
+    else expect(threadStart.params).toHaveProperty('sandbox', 'read-only')
     child.peer.respond(threadStart, { thread: { id: 'thread-1', ephemeral: true } })
     const run = await starting
     const turnStart = await child.peer.nextMethod('turn/start')
