@@ -591,7 +591,7 @@ it('searches the whole workspace, respects .gitignore on request, saves exclusio
   const body = navigator.locator('[data-files-body]')
   const status = navigator.locator('[data-files-search-status]')
   const eye = navigator.locator('[data-files-show-hidden]')
-  const row = (relative: string): Locator => body.locator(`[data-files-path="${root}/${relative}"]`)
+  const row = (relative: string): Locator => body.locator(`[data-files-path=${JSON.stringify(`${root}/${relative}`)}]`)
   await row('README.md').waitFor()
   const searchToggle = column.locator('[data-files-search-toggle]')
   await expect.poll(() => searchToggle.getAttribute('aria-expanded')).toBe('false')
