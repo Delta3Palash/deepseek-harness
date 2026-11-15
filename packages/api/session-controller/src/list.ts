@@ -125,12 +125,13 @@ export class ApiSessionList {
   summaryFor(session: Session): SessionSummary {
     const metadata = this.listMetadata.stateOf(session)
     const projections = this.projectionsFor(session.header, session)
+    const agent = this.ctx.agents.get(session.id)
     return {
       sessionId: session.id,
       updatedAt: updatedAt(session.header, metadata),
-      agentAvailable: this.ctx.agents.get(session.id)?.session === session,
+      agentAvailable: agent?.session === session,
       formatStatus: 'current',
-      running: this.ctx.agents.get(session.id)?.status === 'running',
+      running: agent?.status === 'running',
       blank: metadata.blank,
       ...listFields(session.header),
       ...(projections === undefined ? {} : { projections }),
@@ -310,11 +311,12 @@ export class ApiSessionList {
       // hands back one stable set until the key table changes; both faces below
       // serve only those keys, so a list row cannot carry a unit that declares
       // itself summary-excluded.
-      const keys = this.ctx.sessionProjections.summaryKeys()
+      const registry = this.ctx.sessionProjections
+      const keys = registry.summaryKeys()
       if (session !== undefined) {
         // The live registry computes the block for this Session: its watermark
         // shares the sequence space of the Session's baselines and frames.
-        return hintsOf('sequenced', this.ctx.sessionProjections.snapshot(session, keys))
+        return hintsOf('sequenced', registry.snapshot(session, keys))
       }
       // A cold row reads the persisted cache by header alone; the cache serves
       // seeded and unseeded lifecycles alike because a listing never seeds a
