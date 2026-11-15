@@ -75,6 +75,7 @@ interface DeepSeekDefaultsServer {
   readonly url: string
   readonly requests: JsonObject[]
   readonly paths: string[]
+  readonly requestTimes?: readonly number[]
   close(): Promise<void>
 }
 
@@ -102,12 +103,15 @@ async function deepseekDefaultsServer(
 ): Promise<DeepSeekDefaultsServer> {
   const requests: JsonObject[] = []
   const paths: string[] = []
+  const requestTimes: number[] = []
+  const startedAt = performance.now()
   const server = createServer((request: IncomingMessage, response: ServerResponse) => {
     let body = ''
     request.setEncoding('utf8')
     request.on('data', (chunk: string) => { body += chunk })
     request.on('end', () => {
       requests.push(JSON.parse(body) as JsonObject)
+      requestTimes.push(Math.round(performance.now() - startedAt))
       paths.push(request.url ?? '')
       response.writeHead(200, { 'content-type': 'text/event-stream' })
       let keepAlives = 3
@@ -148,6 +152,7 @@ async function deepseekDefaultsServer(
     url: `http://127.0.0.1:${address.port}`,
     requests,
     paths,
+    requestTimes,
     close: () => new Promise(resolve => server.close(() => { resolve() })),
   }
 }
@@ -836,7 +841,7 @@ describe('headless stream-json snapshots', () => {
     `)
   }, LOADER_SMOKE_TEST_TIMEOUT_MS)
 
-  it('keeps provider comments alive and sends DeepSeek defaults through the one-shot app', async () => {
+  it('accepts provider SSE comments and sends DeepSeek defaults through the one-shot app', async () => {
     const server = await deepseekDefaultsServer()
     try {
       const result = await runLoaderSmoke({
@@ -860,7 +865,12 @@ describe('headless stream-json snapshots', () => {
       })
 
       expect(result.stderr).toBe('')
-      expect(server.requests).toHaveLength(2)
+      const requestDiagnostics = server.requests.map((request, index) => ({
+        role: isTitleRequest(request) ? 'title' : 'agent',
+        receivedAtMs: server.requestTimes?.[index],
+        maxTokens: request.max_tokens,
+      }))
+      expect(server.requests, JSON.stringify(requestDiagnostics)).toHaveLength(2)
       expect(server.paths).toEqual(['/v1/messages', '/v1/messages'])
       const agentRequest = server.requests.find(request => request.max_tokens === 256_000)
       const titleRequest = server.requests.find(isTitleRequest)
