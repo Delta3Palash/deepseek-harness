@@ -1,7 +1,7 @@
 import { mountWorkingDirectoryFixture } from '../../subagent/tests/working-directory-fixture.ts'
 import { randomUUID } from 'node:crypto'
 import { startExternalActivation, externalTestParent } from '../../subagent/tests/external-activation-helpers.ts'
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 import { PassThrough } from 'node:stream'
@@ -845,7 +845,7 @@ describe('query options and result mapping', () => {
     const directory = mkdtempSync(resolve(tmpdir(), 'dsh-claude-executable-'))
     onTestFinished(() => { rmSync(directory, { recursive: true, force: true }) })
     const executable = resolve(directory, process.platform === 'win32' ? 'native worker.exe' : 'native worker')
-    writeFileSync(executable, 'fixture executable is never launched')
+    copyFileSync(process.execPath, executable)
     chmodSync(executable, 0o700)
     const fixture = fakeRun()
     const options = claudeQueryOptions({ ...fixture.spec, pathToClaudeCodeExecutable: executable },
@@ -870,6 +870,36 @@ describe('query options and result mapping', () => {
     for (const pathToClaudeCodeExecutable of badPaths) {
       await expect(startClaudeCodeRun(request(), { ...fixture.spec, pathToClaudeCodeExecutable })).rejects.toThrow()
     }
+    expect(queryMock).not.toHaveBeenCalled()
+    expect(fixture.spawnSpecs).toEqual([])
+  })
+
+  it.each([
+    ['shell wrapper', '#!/bin/sh\nexit 0\n'],
+    ['JavaScript wrapper', '#!/usr/bin/env node\nprocess.exit(0)\n'],
+    ['text executable', 'not a native binary'],
+    ['empty executable', ''],
+  ])('rejects a %s regardless of its filename', async (_kind, contents) => {
+    const directory = mkdtempSync(resolve(tmpdir(), 'dsh-claude-wrapper-'))
+    try {
+      const executable = resolve(directory, process.platform === 'win32' ? 'native.exe' : 'claude')
+      writeFileSync(executable, contents, { mode: 0o700 })
+      const fixture = fakeRun()
+      await expect(startClaudeCodeRun(request(), { ...fixture.spec, pathToClaudeCodeExecutable: executable })).rejects.toThrow()
+      expect(queryMock).not.toHaveBeenCalled()
+      expect(fixture.spawnSpecs).toEqual([])
+    } finally { rmSync(directory, { recursive: true, force: true }) }
+  })
+
+  it.skipIf(process.platform === 'win32')('rejects an extensionless symlink to an executable script', async ({ onTestFinished }) => {
+    const directory = mkdtempSync(resolve(tmpdir(), 'dsh-claude-wrapper-link-'))
+    onTestFinished(() => { rmSync(directory, { recursive: true, force: true }) })
+    const script = resolve(directory, 'wrapper.sh')
+    writeFileSync(script, '#!/bin/sh\nexit 0\n', { mode: 0o700 })
+    const alias = resolve(directory, 'claude')
+    symlinkSync(script, alias)
+    const fixture = fakeRun()
+    await expect(startClaudeCodeRun(request(), { ...fixture.spec, pathToClaudeCodeExecutable: alias })).rejects.toThrow()
     expect(queryMock).not.toHaveBeenCalled()
     expect(fixture.spawnSpecs).toEqual([])
   })

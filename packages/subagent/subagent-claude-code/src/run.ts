@@ -7,7 +7,7 @@
  */
 
 import { randomUUID } from 'node:crypto'
-import { accessSync, constants, statSync } from 'node:fs'
+import { accessSync, closeSync, constants, openSync, readSync, statSync } from 'node:fs'
 import { extname, isAbsolute } from 'node:path'
 import {
   query as officialQuery,
@@ -337,6 +337,21 @@ export function claudeQueryOptions(
       throw new Error('subagent-claude-code: pathToClaudeCodeExecutable must reference a regular file')
     }
     accessSync(executable, constants.X_OK)
+    const descriptor = openSync(executable, 'r')
+    try {
+      // Inspect the target file, including through symlinks; names alone do not
+      // distinguish native executables from extensionless script wrappers.
+      const header = Buffer.alloc(4)
+      const bytesRead = readSync(descriptor, header, 0, header.length, 0)
+      const magic = header.toString('hex')
+      if (bytesRead !== 4 || (!magic.startsWith('4d5a') && ![
+        '7f454c46', // ELF
+        'feedface', 'cefaedfe', 'feedfacf', 'cffaedfe', // Mach-O
+        'cafebabe', 'bebafeca', 'cafebabf', 'bfbafeca', // Universal Mach-O
+      ].includes(magic))) {
+        throw new Error('subagent-claude-code: pathToClaudeCodeExecutable must contain a native executable header, not a script')
+      }
+    } finally { closeSync(descriptor) }
   }
   return {
     abortController: controller,
