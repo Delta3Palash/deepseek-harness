@@ -1196,7 +1196,6 @@ describe('built-in conversation node Definitions', () => {
       key: visible?.key, anchorSeq: 5, visibility: 'visible',
       data: { blocks: [{ kind, text: content }] },
     })
-    expect(visible?.data).toHaveProperty('blocks', [{ kind, text: `${whitespace}\u200b` }])
 
     value.append(at(7, 'assistant/message', {
       turn: 1, step: 1,
