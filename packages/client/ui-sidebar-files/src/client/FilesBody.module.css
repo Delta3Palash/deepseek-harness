@@ -75,15 +75,16 @@
 }
 
 /* Covered content stays laid out but cannot receive keyboard focus. The rule
-   names its row through `data-files-navigator-row`: a `:has()` without a
-   subject makes the browser restyle the whole document after any DOM change. */
-[data-files-navigator-row]:has(> .navigator.fill) > :not(.navigator) {
+   selects siblings on either side of the navigator within its marked row. */
+[data-files-navigator-row] > :not(.navigator):has(~ .navigator.fill),
+[data-files-navigator-row] > .navigator.fill ~ :not(.navigator) {
   visibility: hidden;
 }
 
 /* navigator-layout `FULLSCREEN_QUERY`: every layout fills the row. */
 @media (width < 768px) {
-  [data-files-navigator-row]:has(> .navigator:not(.wholePage)) > :not(.navigator) {
+  [data-files-navigator-row] > :not(.navigator):has(~ .navigator:not(.wholePage)),
+  [data-files-navigator-row] > .navigator:not(.wholePage) ~ :not(.navigator) {
     visibility: hidden;
   }
 

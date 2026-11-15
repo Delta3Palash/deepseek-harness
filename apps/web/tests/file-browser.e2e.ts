@@ -7,10 +7,11 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { chromium, type Locator, type Page } from 'playwright'
+import { build } from 'vite'
 import { expect, it, onTestFailed, onTestFinished } from 'vitest'
 import { createLaunchEnvironmentSnapshot, type LaunchEnvironmentSnapshot } from '@deepseek-ai/dsh-launch-environment'
 import { launchWebScaffold, seedSession, watchConsole } from './scaffold.ts'
-import { connectFreshWorkspace, saveFailureShot } from './support.ts'
+import { connectFreshWorkspace, REPO_ROOT, saveFailureShot } from './support.ts'
 
 /** Wait for a stable, hit-tested source, then drag its centre to `to`. */
 async function drag(page: Page, from: Locator, to: { x: number; y: number }): Promise<void> {
@@ -332,6 +333,22 @@ it('browses workspace files in tabs that share one pane tree', async () => {
     await page.setViewportSize({ width: 1680, height: 1000 })
     await expect.poll(() => body.evaluate(node => getComputedStyle(node).visibility)).toBe('visible')
   }
+
+  // At the viewport boundary an overlay-width row changes only whether the tree covers its body.
+  await layout.evaluate((node) => { node.textContent = '[data-sidebar-right-panel] { width: 460px !important; }' })
+  await column.locator('[data-files-navigator-mode="overlay"]:visible').waitFor()
+  await toggle.focus()
+  await page.setViewportSize({ width: 767, height: 1000 })
+  await expect.poll(() => body.evaluate(node => getComputedStyle(node).visibility)).toBe('hidden')
+  await page.keyboard.press('Tab')
+  expect(await navigator.evaluate(node => node.contains(document.activeElement))).toBe(true)
+  expect(await body.evaluate(node => node.contains(document.activeElement))).toBe(false)
+  await page.setViewportSize({ width: 768, height: 1000 })
+  await expect.poll(() => body.evaluate(node => getComputedStyle(node).visibility)).toBe('visible')
+  await frame.focus()
+  expect(await frame.evaluate(node => document.activeElement === node)).toBe(true)
+  await page.setViewportSize({ width: 1680, height: 1000 })
+  await layout.evaluate((node) => { node.textContent = '[data-sidebar-right-panel] { width: 960px !important; }' })
 
   // A preview dragged out into a floating panel keeps where the reader was in it.
   await tabs.filter({ hasText: 'b.txt' }).click()
@@ -692,3 +709,74 @@ it('searches the whole workspace, respects .gitignore on request, saves exclusio
   await expect.poll(() => row('.hidden-widget.txt').count()).toBe(0)
   expect(errors).toEqual({ warnings: [], pageErrors: [] })
 }, 120_000)
+
+// This stylesheet fixture covers host sibling orders and multiple navigators;
+// the assembled-page scenarios above own the actual dock and preview layout.
+it('hides only direct content siblings as file navigator layouts change', async () => {
+  const source = join(REPO_ROOT, 'packages/client/ui-sidebar-files/src/client/FilesBody.module.css').replaceAll('\\', '/')
+  const entry = join(REPO_ROOT, 'apps/web/navigator-visibility-fixture.ts').replaceAll('\\', '/')
+  const compiled = await build({
+    configFile: false,
+    root: join(REPO_ROOT, 'apps/web'),
+    logLevel: 'error',
+    plugins: [{
+      name: 'navigator-visibility-fixture',
+      resolveId(id) { if (id.replaceAll('\\', '/') === entry) return entry },
+      load(id) { if (id === entry) return `export { default } from ${JSON.stringify(source)}` },
+    }],
+    css: { modules: { generateScopedName: '[local]' } },
+    build: { write: false, minify: false, lib: { entry, formats: ['es'] } },
+  })
+  if ('on' in compiled) throw new Error('expected an in-memory stylesheet build, not a watcher')
+  const styles = (Array.isArray(compiled) ? compiled : [compiled]).flatMap(bundle => bundle.output)
+    .flatMap(output => output.type === 'asset' && output.fileName.endsWith('.css')
+      ? [typeof output.source === 'string' ? output.source : new TextDecoder().decode(output.source)] : [])
+    .join('\n')
+  expect(styles).not.toBe('')
+  const names = { navigator: 'navigator', fill: 'fill', wholePage: 'wholePage', overlay: 'overlay' }
+  const browser = await chromium.launch()
+  onTestFinished(() => browser.close())
+  for (const width of [767, 768]) {
+    const page = await browser.newPage({ viewport: { width, height: 700 } })
+    await page.setContent(`<button id="start">Start</button>
+      <div data-files-navigator-row id="row">
+        <section id="before"><button>Before</button></section>
+        <aside id="first" class="${names.navigator} ${names.overlay}"><button>First navigator</button></aside>
+        <section id="middle"><button>Middle</button></section>
+        <aside id="second" class="${names.navigator} ${names.wholePage}"><button>Second navigator</button></aside>
+        <section id="after"><button>After</button></section>
+      </div>
+      <div data-files-navigator-row><section id="nested"><button>Nested content</button><div><aside class="${names.navigator} ${names.fill}"></aside></div></section></div>
+      <div><section id="unmarked"><button>Unmarked content</button></section><aside class="${names.navigator} ${names.fill}"></aside></div>`)
+    await page.addStyleTag({ content: styles })
+    for (const state of [
+      { first: 'overlay', second: 'wholePage', hidden: width < 768 },
+      { first: 'wholePage', second: 'fill', hidden: true },
+      { first: 'wholePage', second: 'none', hidden: false },
+      { first: 'fill', second: 'none', hidden: true },
+      { first: 'none', second: 'none', hidden: false },
+    ] as const) {
+      await page.evaluate(({ state, names }) => {
+        for (const id of ['first', 'second'] as const) {
+          const element = document.getElementById(id)
+          if (element === null) continue
+          const mode = state[id]
+          if (mode === 'none') element.remove()
+          else element.className = `${names.navigator} ${names[mode]}`
+        }
+      }, { state, names })
+      const result = await page.evaluate(() => ['before', 'middle', 'after', 'nested', 'unmarked'].map((id) => {
+        const node = document.getElementById(id)!
+        const button = node.querySelector('button')!
+        document.getElementById('start')!.focus()
+        button.focus()
+        return { id, visibility: getComputedStyle(node).visibility, focusable: document.activeElement === button }
+      }))
+      expect(result).toEqual(['before', 'middle', 'after', 'nested', 'unmarked'].map((id) => {
+        const hidden = ['before', 'middle', 'after'].includes(id) && state.hidden
+        return { id, visibility: hidden ? 'hidden' : 'visible', focusable: !hidden }
+      }))
+    }
+    await page.close()
+  }
+})
