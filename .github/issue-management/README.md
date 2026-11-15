@@ -8,7 +8,7 @@ English | [中文](README.zh.md)
 
 ## Summary
 
-Contributors can link Issues as context without coupling pull-request validation to Project availability. Resolving references additionally enforce Project Priority. The required `Issue policy` job and the separate lifecycle workflow use trusted default-branch code.
+Contributors can link Issues as context without coupling pull-request validation to Project availability. In the upstream repository, resolving references additionally enforce Project Priority, and Project automation uses trusted default-branch code. Forks use the read-only native policy described below.
 
 ## Table of Contents
 
@@ -58,6 +58,12 @@ Before removing a legacy organization field, compare every value with its Projec
 
 Lifecycle processing is event-driven, not a reconciler. Omitted events do not repair Project state, and concurrent Project mutations have no atomic compare-and-swap. Selective evaluation does not redesign required-check authority or guarantee measured Actions-minute savings. The [archived selective-evaluation decision](../../.agents/notes/archived/process/2026-09-07-selective-issue-policy-evaluation.md) records the trade-offs.
 
+Forks without the upstream organization Project use [fork-native.mjs](fork-native.mjs). Repository identity comes from the GitHub event and `GITHUB_REPOSITORY`, which must agree. Eligible PRs retain the same kind, area, reference, and review-entry rules. Referenced Issues need a native Type, an area label, no retired or PR-only labels, and valid native open/closed state. Optional `p0`–`p3` Issue labels supply explicit fork Priority; resolving PRs retain highest-Priority matching. There are no invented Project values, board transitions, or Start Dates. Maintainers and GitHub closing keywords own native Issue state; lifecycle jobs audit it without writes or automatic label repair.
+
+The fork bootstrap runs candidate code with only Contents, Issues, and Pull Requests read permissions and no App secrets. Its default branch initially lacks the new policy, so a trusted-default-only checkout cannot bootstrap it. The upstream Project job remains separate; the required `Issue policy` aggregate requires the applicable job to succeed and the other to be skipped. This read-only metadata check is candidate-editable like the test workflows; it does not replace the independent review gate. Weighted approval continues executing trusted default-branch code with its existing approval requirements. No direct default-branch mutation is needed for bootstrap.
+
+Fork test lanes select standard `ubuntu-24.04` and `windows-2025` runners instead of unavailable organization labels, while retaining explicit PR failover choices and every existing test command and required verdict dependency. Their worker and partition budgets are reduced for hosted capacity. Master-only serial inventories also use standard fork runners; Linux installs the hosted browser system dependencies. Manually selected larger-runner benchmarks still require a configured pool.
+
 -----
 
 <a id="module-ownership"></a>
@@ -71,6 +77,8 @@ Maintainers reuse the owning module directly; [policy.mjs](policy.mjs) only read
 [rules.mjs](rules.mjs) owns pure validation, reference parsing, status decisions, and date conversion. [github.mjs](github.mjs) owns credential selection, REST/GraphQL transport, Issue/Project reads, and Project membership and field writes.
 
 [pull-request.mjs](pull-request.mjs) assembles read-only PR snapshots and runs policy preflight and validation, including their workflow outputs. [lifecycle.mjs](lifecycle.mjs) reuses the PR reference reader and shared rules to coordinate Project mutations, Issue label repairs, and audit comments. Snapshot readers do not mutate GitHub; the shared transport also supports writes, so importing it does not restrict a caller's permissions.
+
+[fork-native.mjs](fork-native.mjs) owns the read-only native Issue audit and fork PR snapshots. It reuses reference parsing and PR rules, never queries ProjectV2, and is tested with injected GET-only transport.
 
 </details>
 

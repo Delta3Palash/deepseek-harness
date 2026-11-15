@@ -34,6 +34,7 @@ jobs:
   lifecycle:
     name: Issue lifecycle
     if: >-
+      !github.event.repository.fork &&
       (github.event_name != 'pull_request_review' || github.event.review.state == 'changes_requested') &&
       (github.event_name != 'pull_request' || github.event.action != 'edited' || github.event.changes.body != null)
     runs-on: ubuntu-latest
@@ -55,3 +56,22 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: node .github/issue-management/policy.mjs lifecycle
+
+  fork-lifecycle:
+    name: Issue lifecycle (fork)
+    if: github.event.repository.fork
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: read
+    steps:
+      # Native Issue state is owned by GitHub and maintainers. This audit has
+      # read permissions only, including while bootstrapping from a candidate PR.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Audit native Issue lifecycle
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node .github/issue-management/fork-native.mjs

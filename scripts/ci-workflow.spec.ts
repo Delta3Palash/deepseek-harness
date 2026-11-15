@@ -7,7 +7,12 @@ import { describe, expect, it } from 'vitest'
 
 function evaluateRunsOn(selector: unknown, context: Record<string, unknown>): unknown {
   if (typeof selector !== 'string') throw new TypeError('Runner selector must be a string')
-  return runInNewContext(selector.trim().slice(3, -2), context, { timeout: 1000 })
+  const github = context.github as { event?: Record<string, unknown> } | undefined
+  const normalized = {
+    ...context,
+    github: { ...github, event: { repository: { fork: false }, ...github?.event } },
+  }
+  return runInNewContext(selector.trim().slice(3, -2), normalized, { timeout: 1000 })
 }
 
 const root = resolve(import.meta.dirname, '..')
@@ -15,6 +20,35 @@ const runnerPrivatePnpmDestination = /^\$\{\{ runner\.temp \}\}\/setup-pnpm-\$\{
 const nativeWindowsPnpmDestination = '${{ runner.temp }}/setup-pnpm-js-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}'
 
 describe('CI workflow', () => {
+  it('runs every fork PR lane on available hosted runners without losing failover or verdict inputs', () => {
+    for (const [file, names, variable, hosted] of [
+      ['ci.yml', ['node-24', 'node-24-lint', 'node-24-coverage', 'node-24-consumers'], 'DSH_CI_FAILOVER_LINUX', 'ubuntu-24.04'],
+      ['ci-windows.yml', ['windows-publisher', 'windows-build', 'windows-coverage', 'windows-native-tests'], 'DSH_CI_FAILOVER_WINDOWS', 'windows-2025'],
+    ] as const) {
+      const workflow = loadWorkflow('.github/workflows/' + file)
+      for (const name of names) {
+        const job = workflowJob(workflow, name)
+        for (const login of ['maintainer', 'dependabot[bot]']) {
+          const github = { event: { repository: { fork: true }, pull_request: { user: { login } } } }
+          expect(evaluateRunsOn(job['runs-on'], { github, vars: {} }), name).toBe(hosted)
+          expect(evaluateRunsOn(job['runs-on'], { github, vars: { [variable]: 'blacksmith' } }), name)
+            .toMatch(/^blacksmith-/)
+          expect(evaluateRunsOn(job['runs-on'], {
+            github, vars: { [variable]: 'selfhosted' }, fromJSON: JSON.parse,
+          }), name).toEqual(login === 'dependabot[bot]' ? hosted : file === 'ci.yml'
+            ? ['self-hosted', 'linux', 'x64', 'vm-backup'] : ['self-hosted', 'dsh-win-ci', 'windows'])
+        }
+      }
+      const coverage = workflowJob(workflow, file === 'ci.yml' ? 'node-24-coverage' : 'windows-coverage')
+      if (!isRecord(coverage.env)) throw new TypeError('Coverage must define its resource budget')
+      for (const name of ['DSH_COVERAGE_MAX_WORKERS', 'DSH_COVERAGE_PARTITIONS', 'DSH_GATE_CONCURRENCY']) {
+        expect(evaluateRunsOn(coverage.env[name], { vars: {}, github: { event: { repository: { fork: true } } } }), name)
+          .toBe('2')
+      }
+      expect(coverage.steps).toContainEqual(expect.objectContaining({ run: 'pnpm run check:ci:coverage' }))
+    }
+  })
+
   it('keeps at most eleven worker jobs active across PR workflows while Python runtime targets follow the SDK suite', () => {
     const ci = loadWorkflow('.github/workflows/ci.yml')
     const ciWindows = loadWorkflow('.github/workflows/ci-windows.yml')
@@ -457,7 +491,7 @@ describe('CI workflow', () => {
     }
 
     expect(windowsCoverage.name).toBe('windows node 24 / coverage')
-    expect(windowsCoverage.env).toMatchObject({ DSH_COVERAGE_PARTITIONS: "${{ vars.DSH_CI_FAILOVER_WINDOWS == 'selfhosted' && github.event.pull_request.user.login != 'dependabot[bot]' && '4' || '' }}" })
+    expect(windowsCoverage.env).toMatchObject({ DSH_COVERAGE_PARTITIONS: "${{ vars.DSH_CI_FAILOVER_WINDOWS == 'selfhosted' && github.event.pull_request.user.login != 'dependabot[bot]' && '4' || github.event.repository.fork && '2' || '' }}" })
     const coverageSteps = windowsCoverage.steps as unknown[]
     const coverageCommands = coverageSteps.filter((step): step is Record<string, unknown> & { run: string } => (
       isRecord(step) && typeof step.run === 'string'
@@ -500,7 +534,7 @@ describe('CI workflow', () => {
       'timeout-minutes': 15,
       env: {
         DSH_GATE_FAIL_FAST: '',
-        DSH_PUBLINT_CONCURRENCY: "${{ vars.DSH_CI_FAILOVER_WINDOWS == 'selfhosted' && github.event.pull_request.user.login != 'dependabot[bot]' && '8' || '' }}",
+        DSH_PUBLINT_CONCURRENCY: "${{ vars.DSH_CI_FAILOVER_WINDOWS == 'selfhosted' && github.event.pull_request.user.login != 'dependabot[bot]' && '8' || github.event.repository.fork && '2' || '' }}",
       },
     })
     expect(observational?.if).toBeUndefined()
@@ -517,7 +551,7 @@ describe('CI workflow', () => {
 
     // serial-windows: master-only standby, self-hosted, non-blocking, lives in ci-master.
     expect(serialWindows.if).toBe("github.event_name == 'push' && github.ref == 'refs/heads/master'")
-    expect(serialWindows['runs-on']).toEqual(['self-hosted', 'dsh-win-ci', 'windows'])
+    expect(evaluateRunsOn(serialWindows['runs-on'], { fromJSON: JSON.parse })).toEqual(['self-hosted', 'dsh-win-ci', 'windows'])
     expect(serialWindows.name).toBe('serial / windows (self-hosted standby)')
     // Its store must share the ReFS workspace volume for clone; the install
     // must carry the same filesystem branch as the PR jobs.
@@ -852,7 +886,17 @@ describe('CI workflow', () => {
       expect(job.concurrency).toBeUndefined()
       // Standby drills remain post-merge work, but share run cancellation.
       expect(job.if).toBe("github.event_name == 'push' && github.ref == 'refs/heads/master'")
+      const windows = name === 'serial-windows'
+      expect(evaluateRunsOn(job['runs-on'], { fromJSON: JSON.parse }))
+        .toEqual(windows ? ['self-hosted', 'dsh-win-ci', 'windows'] : ['self-hosted', 'linux', 'x64', 'vm-backup'])
+      expect(evaluateRunsOn(job['runs-on'], { github: { event: { repository: { fork: true } } } }))
+        .toBe(windows ? 'windows-2025' : 'ubuntu-24.04')
     }
+    expect(workflowJob(workflow, 'serial-linux-selfhosted').steps).toContainEqual({
+      name: 'Install hosted Playwright browsers and system dependencies',
+      if: 'github.event.repository.fork',
+      run: 'pnpm --filter @deepseek-ai/dsh-web-frontend exec playwright install --with-deps chromium webkit',
+    })
 
     // Pin the post-merge runtime, Wine, and standby inventory.
     const NOT_PUSH_REACHABLE = new Set([
@@ -1591,6 +1635,32 @@ describe('Weighted approval workflow', () => {
 })
 
 describe('Issue lifecycle workflow', () => {
+  it('isolates fork policy from App credentials and preserves the required live metadata verdict', () => {
+    const policy = loadWorkflow('.github/workflows/issue-policy.yml')
+    const lifecycle = loadWorkflow('.github/workflows/issue-lifecycle.yml')
+    for (const [workflow, name] of [[policy, 'fork-policy'], [lifecycle, 'fork-lifecycle']] as const) {
+      const job = workflowJob(workflow, name)
+      expect(job.if).toBe('github.event.repository.fork')
+      expect(job.permissions).toEqual({ contents: 'read', issues: 'read', 'pull-requests': 'read' })
+      expect(job['continue-on-error']).toBeUndefined()
+      expect(JSON.stringify(job)).not.toContain('secrets.')
+      expect(JSON.stringify(job)).not.toContain('create-github-app-token')
+      expect(job.steps).toContainEqual(expect.objectContaining({
+        run: 'node .github/issue-management/fork-native.mjs',
+        env: { GITHUB_TOKEN: '${{ github.token }}' },
+      }))
+      expect(job.steps).toContainEqual(expect.objectContaining({ with: { 'persist-credentials': false } }))
+    }
+    expect(workflowJob(policy, 'project-policy').if).toBe('${{ !github.event.repository.fork }}')
+    expect(workflowJob(lifecycle, 'lifecycle').if).toContain('!github.event.repository.fork &&')
+    const verdict = workflowJob(policy, 'policy')
+    expect(verdict).toMatchObject({ name: 'Issue policy', needs: ['project-policy', 'fork-policy'], if: 'always()', permissions: {} })
+    if (!Array.isArray(verdict.steps)) throw new TypeError('Issue policy verdict must define steps')
+    const command = verdict.steps.filter(isRecord).find(step => step.name === 'Require the applicable Issue policy')
+    expect(command?.run).toContain("FORK_RESULT === 'success' && PROJECT_RESULT === 'skipped'")
+    expect(command?.run).toContain("PROJECT_RESULT === 'success' && FORK_RESULT === 'skipped'")
+  })
+
   it('allocates lifecycle runners only for events that can change the board', () => {
     const lifecycle = loadWorkflow('.github/workflows/issue-lifecycle.yml')
     const policy = loadWorkflow('.github/workflows/issue-policy.yml')
@@ -1631,7 +1701,7 @@ describe('Issue lifecycle workflow', () => {
 
   it('mints Project credentials only after preflight and always revalidates current metadata', () => {
     const policy = loadWorkflow('.github/workflows/issue-policy.yml')
-    const policyJob = workflowJob(policy, 'policy')
+    const policyJob = workflowJob(policy, 'project-policy')
     if (!Array.isArray(policyJob.steps)) throw new TypeError('Issue policy job must define steps')
     const steps = policyJob.steps.filter(isRecord)
     const tokenStep = steps.find(step => step.name === 'Create Project read token')
@@ -1641,7 +1711,7 @@ describe('Issue lifecycle workflow', () => {
     expect(preflightStep?.run).toContain('if [ -f .github/issue-management/selective-preflight.json ]; then')
     expect(preflightStep?.run).toContain('node .github/issue-management/policy.mjs pr-preflight')
     expect(preflightStep?.if).toBeUndefined()
-    expect(policyJob.if).toBeUndefined()
+    expect(policyJob.if).toBe('${{ !github.event.repository.fork }}')
     expect(validateStep?.if).toBe("${{ steps.preflight.outputs.legacy-automated != 'true' }}")
 
     expect(tokenStep).toMatchObject({

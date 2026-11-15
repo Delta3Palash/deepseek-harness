@@ -12,8 +12,9 @@ permissions:
   pull-requests: read
 
 jobs:
-  policy:
-    name: Issue policy
+  project-policy:
+    name: Issue policy (Project)
+    if: ${{ !github.event.repository.fork }}
     runs-on: ubuntu-latest
     steps:
       - name: Check out trusted policy
@@ -56,3 +57,43 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
           PROJECT_TOKEN: ${{ steps.app-token.outputs.token }}
         run: node .github/issue-management/policy.mjs pr
+
+  fork-policy:
+    name: Issue policy (fork)
+    if: github.event.repository.fork
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: read
+    steps:
+      # Bootstrap the personal fork without executing candidate code with write
+      # tokens or App secrets. Privileged approval policy stays on trusted master.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Validate native Issue metadata
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node .github/issue-management/fork-native.mjs
+
+  policy:
+    name: Issue policy
+    needs: [project-policy, fork-policy]
+    if: always()
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Require the applicable Issue policy
+        env:
+          IS_FORK: ${{ github.event.repository.fork }}
+          PROJECT_RESULT: ${{ needs.project-policy.result }}
+          FORK_RESULT: ${{ needs.fork-policy.result }}
+        run: |
+          node --input-type=module <<'NODE'
+          const { IS_FORK, FORK_RESULT, PROJECT_RESULT } = process.env
+          const valid = IS_FORK === 'true'
+            ? FORK_RESULT === 'success' && PROJECT_RESULT === 'skipped'
+            : IS_FORK === 'false' && PROJECT_RESULT === 'success' && FORK_RESULT === 'skipped'
+          if (!valid) throw new Error('The applicable Issue policy must succeed; the other must be skipped')
+          NODE
