@@ -1594,6 +1594,7 @@ describe('run lifecycle and quiescence', () => {
     const run = await starting
     expect(spawn).toHaveBeenCalledWith({
       argv: codexAppServerArgv(),
+      allowShellFallback: false,
       cwd: process.cwd(),
       stdio: { stdin: 'pipe', stdout: 'pipe', stderr: 'pipe' },
       graceMs: DEFAULT_DISPOSE_GRACE_MS,

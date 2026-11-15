@@ -240,6 +240,7 @@ export async function startCodexRun(
   try {
     child = spec.spawn({
       argv: codexAppServerArgv(),
+      allowShellFallback: false,
       cwd: spec.cwd,
       stdio: { stdin: 'pipe', stdout: 'pipe', stderr: 'pipe' },
       graceMs: spec.disposeGraceMs,

@@ -20,6 +20,18 @@ interface FinalOutput {
 }
 const emptyResult: FinalOutput = { outcome: { exitCode: 0, signal: null }, spills: {}, collected: {} }
 
+it.each([false, null, 'false'])('rejects unsupported shell-fallback policy %j before remote preparation', async (policy) => {
+  const fixture = await setup()
+  const request = { ...spec }
+  Reflect.set(request, 'allowShellFallback', policy)
+  try {
+    expect(() => fixture.runtime.spawn(request)).toThrow(policy === false ? 'cannot disable remote shell fallback' : 'must be a boolean')
+    expect(fixture.calls).toEqual([])
+  } finally {
+    await fixture.close()
+  }
+})
+
 async function setup(options: { pause?: 'prepare' | 'connect' | 'start'; failPrepare?: Error; failStart?: unknown; failTerminate?: Error; wait?: boolean } = {}) {
   const ctx = new Context()
   const disposalErrors: unknown[] = []

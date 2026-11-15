@@ -75,7 +75,9 @@ describe('CI workflow', () => {
     })
     expect(workflowJob(ci, 'all-checks-passed').needs).toContain('node-compat')
     const ordinaryJobs = Object.entries(ci.jobs)
-      .filter(([name]) => !['node-compat', 'all-checks-passed', 'publisher-isolated'].includes(name))
+      .filter(([name]) => !['node-compat', 'subprocess-macos', 'all-checks-passed', 'publisher-isolated'].includes(name))
+    // The single native macOS check starts only after compatibility releases its slots.
+    expect(workflowJob(ci, 'subprocess-macos').needs).toBe('node-compat')
     for (const [name, job] of ordinaryJobs) {
       if (!isRecord(job)) throw new TypeError(`${name} must define a job`)
       expect(job).not.toHaveProperty('strategy')
@@ -162,10 +164,27 @@ describe('CI workflow', () => {
       'publisher-isolated',
       'python-runtime',
       'python-sdk',
+      'subprocess-macos',
       'windows-build',
       'windows-native-tests',
       'windows-publisher',
     ])
+  })
+
+  it('requires real ARM64 direct-exec and cleanup checks on macOS', () => {
+    const workflow = loadWorkflow('.github/workflows/ci.yml')
+    const job = workflowJob(workflow, 'subprocess-macos')
+    expect(job['runs-on']).toBe('macos-latest')
+    if (!Array.isArray(job.steps)) throw new TypeError('macOS subprocess check must define steps')
+    const steps = job.steps.filter(isRecord)
+    expect(steps).toContainEqual(expect.objectContaining({
+      run: "node -e \"if(process.platform!=='darwin'||process.arch!=='arm64')throw Error('Expected macOS ARM64 runner')\"",
+    }))
+    const command = steps.find(step => step.name === 'Verify direct exec and managed process cleanup')?.run
+    expect(command).toContain('tests/no-shell-fallback.spec.ts')
+    expect(command).toContain('tests/control.spec.ts')
+    expect(command).toContain('tests/spawn.spec.ts')
+    expect(workflowJob(workflow, 'all-checks-passed').needs).toContain('subprocess-macos')
   })
 
   it('retains aggregate diagnostics in required builds and protected publication', () => {

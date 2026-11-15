@@ -854,6 +854,9 @@ describe('query options and result mapping', () => {
     expect(options.spawnClaudeCodeProcess).toBeTypeOf('function')
     expect(queryMock).not.toHaveBeenCalled()
     expect(fixture.spawnSpecs).toEqual([])
+    options.spawnClaudeCodeProcess!(sdkSpawnOptions({ command: executable }))
+    expect(fixture.spawnSpecs[0]).toMatchObject({ argv: [executable, '--output-format', 'stream-json'], allowShellFallback: false })
+    fixture.child.settle()
   })
 
   it('rejects relative, wrapper, missing, and directory executables before SDK query or spawn', async ({ onTestFinished }) => {
@@ -875,6 +878,9 @@ describe('query options and result mapping', () => {
   })
 
   it.each([
+    ['MZ-prefixed shell wrapper', 'MZ=x\nprintf wrapper_payload\n'],
+    ['ELF-magic shell wrapper', Buffer.concat([Buffer.from('7f454c46', 'hex'), Buffer.from('=x\nprintf wrapper_payload\n')])],
+    ['Mach-O-magic shell wrapper', Buffer.concat([Buffer.from('cffaedfe', 'hex'), Buffer.from('=x\nprintf wrapper_payload\n')])],
     ['shell wrapper', '#!/bin/sh\nexit 0\n'],
     ['JavaScript wrapper', '#!/usr/bin/env node\nprocess.exit(0)\n'],
     ['text executable', 'not a native binary'],
@@ -920,7 +926,7 @@ describe('query options and result mapping', () => {
     vi.stubEnv('HOST_SECRET_TOKEN', 'must-not-leak')
     vi.stubEnv('DSH_INTERNAL', 'must-not-leak')
     const child = fakeChild()
-    const spawn = vi.fn(() => child.handle)
+    const spawn = vi.fn<ClaudeCodeRunSpec['spawn']>(() => child.handle)
     const captured: SubprocessHandle[] = []
     const diagnostics: string[] = []
     const spec: ClaudeCodeRunSpec = {
@@ -1009,6 +1015,8 @@ describe('query options and result mapping', () => {
       cwd: '/workspace',
       graceMs: 17,
     }))
+    expect(spawn.mock.calls[0]![0]).not.toHaveProperty('allowShellFallback')
+    child.settle()
   })
 
   it.each(CLAUDE_CODE_PERMISSION_MODES)(

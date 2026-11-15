@@ -27,6 +27,8 @@ English | [中文](README.zh.md)
 
 Mount this provider with [`dsh-ssh`](../ssh/README.md) and its filesystem provider. It has no deployment configuration of its own. `resolveExecutable()` checks the remote executable namespace; fully specified spawn requests supply the remote cwd, environment, stream dispositions and cleanup grace.
 
+`allowShellFallback: false` is rejected before remote preparation because the current SSH protocol does not carry that enforcement policy. Omission or `true` retains existing behavior. Consumers requiring refusal of implicit executable-format shell fallback must use a supporting local provider.
+
 Ordinary spawn returns a handle while remote allocation proceeds. Piped stdin and the optional duplex control endpoint accept writes during allocation. Terminal allocation, writes, foreground inspection, signals and termination retain their asynchronous interfaces.
 
 Terminal requests forward `shellActivity` to the execution provider, and `inspectActivity()` returns its validated state and revision. Opted-in terminals remain addressable after root exit until their owner explicitly terminates them; the SSH helper lease still governs connection-level cleanup.

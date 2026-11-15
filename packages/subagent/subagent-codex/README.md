@@ -79,6 +79,8 @@ The tool returns the child's name after accepting the task and sends its result 
 
 The completion notice contains the selected Codex answer, or the stop reason and optional safe diagnostic. The parent Session also retains the external task identity and complete terminal result independently of the notice; no local child Session is created. Product reasoning, tool activity, raw stderr, and workspace diffs do not enter the parent Session.
 
+The adapter starts the pinned JavaScript wrapper with the current native Node executable and `allowShellFallback: false` on the shared subprocess request. The process provider must refuse executable-format errors without shell interpretation, or reject startup if it cannot enforce that policy. This covers the managed Node launch; the upstream wrapper owns its subsequent native payload launch.
+
 ### Failure and recovery
 
 An install that omits optional dependencies, uses an unsupported platform, or loses the selected payload leaves the provider dormant and fails the first delegation at `initialize` with a safe `unknown` category and any observed process outcome; there is no host-CLI fallback. Raw wrapper text stays on Host stderr. A cancelled run settles as `aborted`.

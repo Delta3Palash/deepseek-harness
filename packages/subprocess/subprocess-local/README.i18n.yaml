@@ -23,6 +23,9 @@
 /deepseek-ai-dsh-subprocess-local/use-this-package/resolving-executables:
   en: b770dddf2a9c3d1e
   zh: f5cb27e63a589a1b
+/deepseek-ai-dsh-subprocess-local/use-this-package/refusing-implicit-shell-fallback:
+  en: 4a54baf584c0311a
+  zh: 514ec1b89aa2a0db
 /deepseek-ai-dsh-subprocess-local/use-this-package/collecting-output:
   en: 8dc283e0b25399c9
   zh: 9c129dce09e36c91
@@ -45,8 +48,8 @@
   en: e4958ac8e71de757
   zh: 713114f106717f9a
 /deepseek-ai-dsh-subprocess-local/understand-the-implementation/source-map:
-  en: 3d5fd99e4ad1f7af
-  zh: 241490c1052f415c
+  en: efb09a7547494cd8
+  zh: 617d654ad0aab423
 /deepseek-ai-dsh-subprocess-local/understand-the-implementation/main-flow:
   en: 10941f963395a46f
   zh: 019c16f3d403957b

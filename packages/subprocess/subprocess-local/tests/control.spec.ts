@@ -82,19 +82,20 @@ describe('managed subprocess control pipe', () => {
     expect(await handle.waitForExit()).toBe(true)
   })
 
-  it.each(['managed', 'fallback'] as const)('returns exact binary control bytes through %s independently of stdio', async (backend) => {
+  it.each(['managed', 'fallback', 'managed-no-shell', 'fallback-no-shell'] as const)('returns exact binary control bytes through %s independently of stdio', async (backend) => {
     root = await mkdtemp(join(tmpdir(), 'dsh-control-'))
     ctx = new Context()
     await ctx.plugin(LocalSubprocessRuntime)
     const input = Buffer.alloc(256 * 1024)
     for (let index = 0; index < input.length; index++) input[index] = index % 256
     const request: SubprocessSpawnSpec = {
+      ...backend.endsWith('no-shell') ? { allowShellFallback: false } : {},
       argv: [process.execPath, fixture, helper, String(input.length)],
       cwd: root,
       stdio: { stdin: 'ignore', stdout: { maxBytes: 1024 }, stderr: { maxBytes: 1024 }, control: 'pipe' },
       graceMs: 1000,
     }
-    handle = backend === 'managed' ? ctx.subprocess.spawn(request) : spawnSubprocess(request)
+    handle = backend.startsWith('managed') ? ctx.subprocess.spawn(request) : spawnSubprocess(request)
     const channel = handle.control
     if (channel === undefined) throw new Error('requested control pipe is absent')
     const received = (async () => {

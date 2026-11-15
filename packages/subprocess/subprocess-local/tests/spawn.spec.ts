@@ -344,12 +344,22 @@ describe('spawnSubprocess', () => {
     await waitGone(grandchild)
   })
 
-  it('aborts via AbortSignal mid-run', async () => {
+  it.each([undefined, false])('aborts via AbortSignal mid-run with shell-fallback policy %s', async (allowShellFallback) => {
     const controller = new AbortController()
-    const running = spawnSubprocess(spec('sleep 60', { signal: controller.signal }))
-    setTimeout(() => { controller.abort('user cancelled') }, 50)
-    const result = await running.done
-    expect(result.signal).toBe(process.platform === 'win32' ? null : 'SIGTERM')
+    const running = spawnSubprocess(spec('sleep 60', {
+      signal: controller.signal, ...allowShellFallback === undefined ? {} : { allowShellFallback },
+      argv: [process.execPath, '-e', 'process.stdout.write("ready\\n"); setInterval(() => {}, 60000)'],
+    }))
+    try {
+      await waitForStdout(running, 'ready\n')
+      controller.abort('user cancelled')
+      const result = await running.done
+      expect(result.signal).toBe(process.platform === 'win32' ? null : 'SIGTERM')
+      expect(await running.waitForExit()).toBe(true)
+    } finally {
+      running.terminate()
+      await running.waitForExit()
+    }
   })
 
   it('throws a stable AbortError when already aborted before spawn', () => {
@@ -941,14 +951,14 @@ describe.skipIf(process.platform === 'win32')('synchronous host-exit termination
 })
 
 describe.skipIf(process.platform === 'win32')('tree-survivor escalation (terminate and bounded waits reach helpers the leader left behind)', () => {
-  it('terminate() SIGKILLs a TERM-trapping descendant after the direct child settles', async () => {
+  it.each([undefined, false])('terminate() SIGKILLs a TERM-trapping descendant after the direct child settles with shell-fallback policy %s', async (allowShellFallback) => {
     // The leader spawns a TERM-trapping helper with all stdio detached from
     // the collected pipes, then exits: the helper holds the GROUP alive while
     // the direct child settles. The escalation must still reach it.
     const pidFile = join(spillDir, `survivor-${Date.now()}.pid`)
     const running = spawnSubprocess(spec(
       `bash -c 'trap "" TERM; echo $$ > ${pidFile}; sleep 60' >/dev/null 2>&1 & disown; wait_placeholder=; exit 0`,
-      { graceMs: 300 },
+      { graceMs: 300, ...allowShellFallback === undefined ? {} : { allowShellFallback } },
     ))
     const helper = await waitForPidFile(pidFile)
     await running.done // direct child settled; helper survives in the group

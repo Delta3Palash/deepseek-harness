@@ -9,6 +9,7 @@
  */
 
 import { type ChildProcess, type SpawnOptions, spawn, spawnSync } from 'node:child_process'
+import { existsSync } from 'node:fs'
 import type { Readable } from 'node:stream'
 import { setTimeout as sleepMs } from 'node:timers/promises'
 import { scrubbedParentEnv, SubprocessError } from '@deepseek-ai/dsh-subprocess'
@@ -26,6 +27,14 @@ import { controlEnvironment, controlPipe } from './control-spawn.ts'
 import { SUBPROCESS_CONTROL_FD } from '@deepseek-ai/dsh-subprocess/control'
 import { linuxProcessGroupLiveMember } from './process-inspector.ts'
 import { OutputCollector, prepareManagedProcessBinding, type SpillFailureReporter } from './output.ts'
+import { runnerEnvironment, spawnRunnerInvocation, targetEnvironment } from './runner-launch.ts'
+import {
+  cleanupLinuxLaunchFiles,
+  createLinuxLaunchFiles,
+  deserializeRunnerError,
+  readLinuxStartupError,
+} from './runner-protocol.ts'
+import type { LinuxLaunchFiles } from './runner-protocol.ts'
 
 type SpawnProcess = (
   program: string,
@@ -162,6 +171,9 @@ function signalTree(
  * @throws when grace, cancellation, or argv is invalid before launch.
  */
 export function validateSubprocessSpec(spec: SubprocessSpawnSpec): void {
+  if (spec.allowShellFallback !== undefined && typeof spec.allowShellFallback !== 'boolean') {
+    throw new Error('subprocess allowShellFallback must be a boolean when supplied')
+  }
   if (!Number.isFinite(spec.graceMs) || spec.graceMs <= 0 || spec.graceMs > MAX_TIMER_DELAY_MS) {
     throw new Error(`subprocess graceMs must be a positive finite number no greater than ${MAX_TIMER_DELAY_MS}`)
   }
@@ -183,7 +195,10 @@ export function validateSubprocessSpec(spec: SubprocessSpawnSpec): void {
   }
 }
 
-function directChildResult(child: ChildProcess): Promise<SubprocessOutcome> {
+function directChildResult(
+  child: ChildProcess,
+  resolveOutcome: (outcome: SubprocessOutcome) => SubprocessOutcome,
+): Promise<SubprocessOutcome> {
   return new Promise((resolve, reject) => {
     let completed = false
     child.once('error', (error) => {
@@ -197,7 +212,13 @@ function directChildResult(child: ChildProcess): Promise<SubprocessOutcome> {
       /* v8 ignore next -- a spawn/kill error may be followed by exit; a Promise can publish only the first terminal event. */
       if (completed) return
       completed = true
-      resolve({ exitCode, signal })
+      try {
+        resolve(resolveOutcome({ exitCode, signal }))
+      } catch (error) {
+        /* v8 ignore next -- startup inspection uses Node filesystem, JSON parsing, and Error constructors. */
+        const failure = error instanceof Error ? error : new Error(String(error))
+        reject(failure)
+      }
     })
   })
 }
@@ -462,7 +483,10 @@ export function bindManagedProcess(
 export function spawnSubprocess(spec: SubprocessSpawnSpec, internals: SpawnInternals = {}): LocalSubprocessHandle {
   const binding = prepareManagedProcessBinding(internals)
   const platform = internals.platform ?? process.platform
-  const [program, ...args] = spec.argv
+  if (spec.allowShellFallback === false && !['linux', 'darwin', 'win32'].includes(platform)) {
+    throw new Error(`subprocess cannot disable shell fallback on ${platform}`)
+  }
+  let [program, ...args] = spec.argv
   const stdio: import('node:child_process').StdioOptions = [
     spec.stdio.stdin === 'ignore' ? 'ignore' : 'pipe',
     spec.stdio.stdout === 'inherit' ? 'inherit' : 'pipe',
@@ -472,14 +496,51 @@ export function spawnSubprocess(spec: SubprocessSpawnSpec, internals: SpawnInter
     while (stdio.length < SUBPROCESS_CONTROL_FD) stdio.push('ignore')
     stdio.push('overlapped')
   }
-  const child = (internals.spawn ?? spawn)(program as string, args, {
-    cwd: spec.cwd,
-    env: controlEnvironment(childEnv(spec.env), spec.stdio.control),
-    stdio,
-    detached: platform !== 'win32',
-    windowsHide: platform === 'win32',
+  let env = controlEnvironment(childEnv(spec.env), spec.stdio.control)
+  let cwd = spec.cwd
+  let files: LinuxLaunchFiles | undefined
+  // Node/libuv retries ENOEXEC through /bin/sh on POSIX even with shell:false.
+  // Replace the private runner image through libc instead, inside this same PGID.
+  if (spec.allowShellFallback === false && platform !== 'win32') {
+    const invocation = spawnRunnerInvocation()
+    files = createLinuxLaunchFiles({
+      cwd: spec.cwd,
+      env: targetEnvironment(spec),
+      allowShellFallback: false,
+      pipeFds: stdio.slice(0, 3).flatMap((disposition, fd) => disposition === 'pipe' ? [fd] : []),
+      ...spec.stdio.control === undefined ? {} : { control: spec.stdio.control },
+    })
+    program = invocation[0]
+    args = [...invocation.slice(1), '--', ...spec.argv]
+    env = runnerEnvironment(files.requestPath, invocation)
+    cwd = process.cwd()
+  }
+  let child: ChildProcess
+  try {
+    child = (internals.spawn ?? spawn)(program as string, args, {
+      cwd, env, stdio,
+      detached: platform !== 'win32',
+      windowsHide: platform === 'win32',
+    })
+  } catch (error) {
+    if (files !== undefined) cleanupLinuxLaunchFiles(files)
+    throw error
+  }
+  const direct = directChildResult(child, (outcome) => {
+    if (files !== undefined) {
+      const startup = readLinuxStartupError(files.startupErrorPath)
+      if (startup !== undefined) throw deserializeRunnerError(startup.error)
+      if (existsSync(files.requestPath) && outcome.signal === null) {
+        throw new Error('subprocess exec bootstrap exited before consuming its launch request')
+      }
+    }
+    return outcome
   })
-  const direct = directChildResult(child)
+  // A nonterminal ChildProcess error must not remove an unconsumed request from
+  // a helper that can still run. Close proves the helper and its pipes settled.
+  child.once('close', () => {
+    if (files !== undefined) cleanupLinuxLaunchFiles(files)
+  })
   const pid = child.pid
   const owner = fallbackOwner(
     platform,

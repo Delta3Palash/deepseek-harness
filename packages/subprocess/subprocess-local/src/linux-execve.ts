@@ -1,4 +1,4 @@
-/** Lazy libc execve and descriptor bindings used by the one-shot Linux bootstrap. */
+/** Lazy libc execve and descriptor bindings used by the one-shot POSIX bootstrap. */
 
 import { getSystemErrorMessage, getSystemErrorName } from 'node:util'
 import { SUBPROCESS_CONTROL_FD } from '@deepseek-ai/dsh-subprocess/control'
@@ -22,6 +22,7 @@ type NativeExecve = (
 ) => number
 
 type NativeFcntl = (fd: number, command: number, argument: number) => number
+type VariadicFcntl = (fd: number, command: number, type: 'int', argument: number) => number
 
 const STANDARD_FILE_DESCRIPTORS = [0, 1, 2] as const
 const F_GETFD = 1
@@ -29,7 +30,6 @@ const F_SETFD = 2
 const FD_CLOEXEC = 1
 const F_GETFL = 3
 const F_SETFL = 4
-const O_NONBLOCK = 0x800
 
 let cachedExecve: LinuxExecve | undefined
 
@@ -50,16 +50,24 @@ function systemError(errno: number, syscall: string, path?: string): Error {
  * Load libc's execve and fcntl symbols on first use and retain the native bindings.
  * @returns a process-replacing execve operation that throws Node-style errors on failure.
  */
-export function loadLinuxExecve(): LinuxExecve {
+export function loadPosixExecve(): LinuxExecve {
+  if (process.platform !== 'linux' && process.platform !== 'darwin') {
+    throw new Error('direct POSIX execve is supported only on Linux and macOS')
+  }
   if (cachedExecve !== undefined) return cachedExecve
+  const nonblock = process.platform === 'darwin' ? 0x0004 : 0x800
   const koffi = requireKoffi()
   const libc = koffi.load(null)
   const nativeExecve = libc.func(
     'int execve(const char *pathname, const char **argv, const char **envp)',
   ) as NativeExecve
-  const nativeFcntl = libc.func(
-    'int fcntl(int fd, int cmd, int arg)',
-  ) as NativeFcntl
+  // Darwin ARM64 passes variadic arguments differently from fixed parameters.
+  const darwinFcntl = process.platform === 'darwin'
+    ? libc.func('int fcntl(int fd, int cmd, ...)') as VariadicFcntl
+    : undefined
+  const nativeFcntl: NativeFcntl = darwinFcntl === undefined
+    ? libc.func('int fcntl(int fd, int cmd, int arg)') as NativeFcntl
+    : (fd, command, argument) => darwinFcntl(fd, command, 'int', argument)
   cachedExecve = (file, argv, env, control, pipeFds = []) => {
     const descriptors = control === 'pipe'
       ? [...STANDARD_FILE_DESCRIPTORS, SUBPROCESS_CONTROL_FD]
@@ -77,7 +85,7 @@ export function loadLinuxExecve(): LinuxExecve {
     for (const fd of pipeFds) {
       const flags = nativeFcntl(fd, F_GETFL, 0)
       if (flags === -1) throw systemError(koffi.errno(), 'fcntl')
-      if ((flags & O_NONBLOCK) !== 0 && nativeFcntl(fd, F_SETFL, flags & ~O_NONBLOCK) === -1) {
+      if ((flags & nonblock) !== 0 && nativeFcntl(fd, F_SETFL, flags & ~nonblock) === -1) {
         throw systemError(koffi.errno(), 'fcntl')
       }
     }
@@ -89,4 +97,12 @@ export function loadLinuxExecve(): LinuxExecve {
     throw systemError(koffi.errno(), 'execve', file)
   }
   return cachedExecve
+}
+
+/**
+ * Retain the Linux containment probe's existing binding entry.
+ * @returns the cached direct POSIX execve binding.
+ */
+export function loadLinuxExecve(): LinuxExecve {
+  return loadPosixExecve()
 }

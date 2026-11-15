@@ -1,13 +1,15 @@
-import { spawn } from 'node:child_process'
-import type { Buffer } from 'node:buffer'
-import { existsSync } from 'node:fs'
-import { resolve } from 'node:path'
+import { spawn, spawnSync } from 'node:child_process'
+import { Buffer } from 'node:buffer'
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import type { SubprocessSpawnSpec } from '@deepseek-ai/dsh-subprocess'
 import {
   cleanupLinuxLaunchFiles,
   createLinuxLaunchFiles,
+  readLinuxStartupError,
 } from '../src/runner-protocol.ts'
 import {
   runnerEnvironment,
@@ -94,6 +96,42 @@ async function execute(invocation: RunnerInvocation): Promise<{ status: number |
 }
 
 describe('subprocess-local runner artifacts', () => {
+  it.skipIf(!existsSync(builtRunner) || !['linux', 'darwin'].includes(process.platform))(
+    'rejects a loader-invalid structured ELF through the built bootstrap without shell execution', () => {
+      const directory = mkdtempSync(join(tmpdir(), 'dsh-built-no-shell-'))
+      const target = join(directory, 'forged-native')
+      const header = Buffer.alloc(128)
+      header.set([0x7f, 0x45, 0x4c, 0x46, 2, 1, 1])
+      header.writeUInt16LE(2, 16)
+      header.writeUInt16LE(0xffff, 18)
+      header.writeUInt32LE(1, 20)
+      header.writeBigUInt64LE(64n, 32)
+      header.writeUInt16LE(64, 52)
+      header.writeUInt16LE(56, 54)
+      header.writeUInt16LE(1, 56)
+      header.writeUInt32LE(1, 64)
+      header.writeUInt32LE(5, 68)
+      header.writeBigUInt64LE(128n, 96)
+      header.writeBigUInt64LE(128n, 104)
+      header.writeBigUInt64LE(4096n, 112)
+      const files = createLinuxLaunchFiles({ cwd: directory, env: targetEnv(), allowShellFallback: false })
+      try {
+        writeFileSync(target, Buffer.concat([header, Buffer.from('\nprintf payload > executed\n')]), { mode: 0o700 })
+        const invocation: RunnerInvocation = [process.execPath, builtRunner]
+        const result = spawnSync(invocation[0], [...invocation.slice(1), '--', target], {
+          cwd: directory, env: runnerEnvironment(files.requestPath, invocation), encoding: 'utf8', timeout: 10_000,
+        })
+        expect(result.error).toBeUndefined()
+        expect(result.status, result.stderr).toBe(127)
+        expect(readLinuxStartupError(files.startupErrorPath)).toMatchObject({ type: 'error', error: { code: 'ENOEXEC' } })
+        expect(existsSync(join(directory, 'executed'))).toBe(false)
+      } finally {
+        cleanupLinuxLaunchFiles(files)
+        rmSync(directory, { recursive: true, force: true })
+      }
+    }, 20_000,
+  )
+
   it('executes the source entry through the provider-owned core', async () => {
     const result = await execute([process.execPath, '--import', 'tsx/esm', sourceRunner])
     expect(result).toEqual({

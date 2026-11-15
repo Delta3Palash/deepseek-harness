@@ -90,18 +90,25 @@ interface SubprocessStdio {
 
 ## 完全显式的 spawn spec
 
-该 seam 不应用任何默认值：每项处置方式、限制与目录都在 spec 上显式给出，因此由调用方自己的配置决定它们，而不是由某个隐藏的子进程服务默认值决定。`argv` 绝不经过 shell 解释。
+处置方式、限制与目录在 spec 上显式给出，可选字段记录各自的默认值。`argv` 包含字面参数。`allowShellFallback: false` 拒绝 `ENOEXEC` 后的隐式 shell 重试；省略或设为 `true` 保留提供方的现有行为。此限制不禁止显式解释器或内核识别的 shebang。无法执行该策略的提供方会在目标执行前拒绝请求。
 
 ```ts type-equiv
 /**
- * A fully-specified spawn request. This seam applies no defaults: every
- * disposition, limit, and directory is explicit, so the caller's own config —
- * not a hidden subprocess-service default — decides them (the `dsh-shell`
- * request/spec split is the owning template).
+ * A spawn request with explicit dispositions, limits, and directory. Optional
+ * environment, cancellation, and shell-fallback policy retain their documented
+ * defaults (the `dsh-shell` request/spec split is the owning template).
  */
 interface SubprocessSpawnSpec {
-  /** Executable and arguments; `argv[0]` is the program. Never shell-interpreted here. */
+  /** Executable and literal arguments; `argv[0]` is the program. */
   argv: readonly string[]
+  /**
+   * Permit the platform's ENOEXEC shell retry for executable text files.
+   * Omission preserves the existing platform behavior. False requires an
+   * execution path with no implicit shell retry, or fails before target launch
+   * when the provider cannot supply one. Explicit interpreters and kernel
+   * shebang handling are unaffected; this is not native-file validation.
+   */
+  allowShellFallback?: boolean
   /** Working directory for the child. */
   cwd: string
   /** Per-stream stdio dispositions. */

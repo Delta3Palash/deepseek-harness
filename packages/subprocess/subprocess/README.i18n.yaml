@@ -9,8 +9,8 @@
   en: f692e3fa2c598b70
   zh: f7d899b31647ead9
 /deepseek-ai-dsh-subprocess/summary:
-  en: 4c3e83922d6ba18c
-  zh: d794f5cb99939e6d
+  en: 69d239726beaef7e
+  zh: b4f0d84bc21e765f
 /deepseek-ai-dsh-subprocess/table-of-contents:
   en: d152484eb41ac6b4
   zh: 09388d293f9be9cb
@@ -23,6 +23,9 @@
 /deepseek-ai-dsh-subprocess/use-this-package/starting-a-managed-process:
   en: 891cb74d5d35095c
   zh: 296cb1890116fb05
+/deepseek-ai-dsh-subprocess/use-this-package/controlling-executable-format-fallback:
+  en: 6b07a678cbe6b36a
+  zh: 0c5f52b207963a8a
 /deepseek-ai-dsh-subprocess/use-this-package/choosing-how-output-is-delivered:
   en: c02fe7246326c164
   zh: 1d31096e31e1feee
@@ -45,8 +48,8 @@
   en: 25cd344c959cfd9e
   zh: 045880776ab82d1e
 /deepseek-ai-dsh-subprocess/understand-the-implementation/design-concept:
-  en: 07201ec2256c25f6
-  zh: 046109cfa92194f3
+  en: fe11cc7fe8c53ef7
+  zh: 2382097e6823cddb
 /deepseek-ai-dsh-subprocess/understand-the-implementation/source-map:
   en: e56d6825d1b990a5
   zh: c70cabda3bfcd2ab
@@ -54,8 +57,8 @@
   en: 9998dc0a990fbcf1
   zh: ba179617f60cb9bc
 /deepseek-ai-dsh-subprocess/understand-the-implementation/lifecycle-and-invariants:
-  en: a132325eea7cadb4
-  zh: 434cbbc61ff9cd0e
+  en: 321d2f9d33e3d543
+  zh: 5f76a0424d42898f
 /deepseek-ai-dsh-subprocess/further-exploration:
   en: f560a70ff8ad00db
   zh: 1a51eca4b30055cb

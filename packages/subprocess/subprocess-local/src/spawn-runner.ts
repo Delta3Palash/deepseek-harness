@@ -15,7 +15,7 @@ import type {
   CurrentTokenProcessBindings,
   NativePtr,
 } from '@deepseek-ai/dsh-win32-process'
-import { loadLinuxExecve } from './linux-execve.ts'
+import { loadPosixExecve } from './linux-execve.ts'
 import {
   consumeLinuxLaunchRequest,
   isWindowsTerminateRequest,
@@ -44,7 +44,7 @@ type RunnerHost = Pick<NodeJS.Process, 'env' | 'exitCode' | 'connected' | 'cwd' 
 
 /** Injectable operations used by the protocol-owner tests. */
 export interface SpawnRunnerInternals {
-  execve: ReturnType<typeof loadLinuxExecve>
+  execve: ReturnType<typeof loadPosixExecve>
   loadWin32ProcessBindings(): CurrentTokenProcessBindings
   spawnCurrentTokenJobProcess: typeof spawnCurrentTokenJobProcess
   closeFileDescriptor(fileDescriptor: number): void
@@ -57,7 +57,7 @@ export interface SpawnRunnerInternals {
 
 const defaultInternals: SpawnRunnerInternals = {
   /* v8 ignore next -- source/built/packaged subprocess smoke executes this only in a replaceable child process. */
-  execve: (...args) => loadLinuxExecve()(...args),
+  execve: (...args) => loadPosixExecve()(...args),
   loadWin32ProcessBindings,
   spawnCurrentTokenJobProcess,
   closeFileDescriptor: closeSync,
@@ -140,7 +140,7 @@ function execLinuxFile(
   try {
     return internals.execve(file, argv, request.env, request.control, request.pipeFds)
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOEXEC') throw error
+    if (request.allowShellFallback === false || (error as NodeJS.ErrnoException).code !== 'ENOEXEC') throw error
     return internals.execve('/bin/sh', ['/bin/sh', file, ...argv.slice(1)], request.env, request.control, request.pipeFds)
   }
 }

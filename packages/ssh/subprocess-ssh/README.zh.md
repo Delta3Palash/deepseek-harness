@@ -27,6 +27,8 @@ kind: "package-reference"
 
 将本提供方与 [`dsh-ssh`](../ssh/README.zh.md) 及其文件系统提供方一同挂载。本提供方没有独立部署配置。`resolveExecutable()` 检查远端可执行文件命名空间；完整的 spawn 请求提供远端 cwd、环境、流处置方式及清理宽限期。
 
+`allowShellFallback: false` 会在远端准备前被拒绝，因为当前 SSH 协议不承载该强制执行策略。省略或设为 `true` 保留现有行为。要求拒绝可执行格式错误后的隐式 shell 回退的消费方必须使用支持该策略的本地提供方。
+
 普通 spawn 在远端分配过程中返回句柄。管道 stdin 和可选双工控制端点在分配过程中接受写入。终端分配、写入、前台检查、信号及终止均保留异步接口。
 
 终端请求将 `shellActivity` 转发给执行 provider，`inspectActivity()` 返回经校验的状态和 revision。启用后，根进程退出的终端仍可访问，直到 owner 明确终止；连接级清理仍由 SSH helper 租约控制。

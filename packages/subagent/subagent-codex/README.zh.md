@@ -79,6 +79,8 @@ Bundle 将 `tool-subagent-codex` 作为 Host 条目插入，因此 `subagent_cod
 
 完成通知包含所选的 Codex 答案，或停止原因与可选的安全诊断。父会话还独立保存外部任务的身份和完整终态结果；无需创建本地子 Session。产品推理、工具活动、原始 stderr 与工作区差异不会进入父会话。
 
+适配器通过当前原生 Node 可执行文件启动锁定的 JavaScript wrapper，并在共享子进程请求上设置 `allowShellFallback: false`。进程提供方必须拒绝可执行格式错误，不得交给 shell 解释；无法执行该策略时必须拒绝启动。此策略覆盖受管理的 Node 启动；后续原生载荷由上游 wrapper 负责启动。
+
 ### 失败与恢复
 
 省略 optional dependencies、当前平台不受支持或所选载荷缺失的安装会让提供方保持休眠，并在第一次委派时于 `initialize` 阶段以安全 `unknown` 类别和任何已观测进程结果失败；不存在宿主 CLI 回退。原始 wrapper 文本只保留在 Host stderr。被取消的运行以 `aborted` 结算。

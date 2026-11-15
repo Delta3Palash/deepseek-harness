@@ -19,6 +19,34 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  subprocess-macos:
+    name: native subprocess / macOS ARM64
+    needs: node-compat
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v5.0.0
+        with:
+          dest: ${{ runner.temp }}/setup-pnpm-${{ github.run_id }}-${{ github.run_attempt }}
+      - uses: actions/setup-node@v7.0.0
+        with:
+          node-version: ${{ env.PRIMARY_NODE_VERSION }}
+      - name: Confirm Darwin ARM64 ABI
+        run: node -e "if(process.platform!=='darwin'||process.arch!=='arm64')throw Error('Expected macOS ARM64 runner')"
+      - name: Install (immutable)
+        run: pnpm install --frozen-lockfile
+      - name: Verify direct exec and managed process cleanup
+        run: >-
+          pnpm exec vitest run
+          packages/subprocess/subprocess-local/tests/no-shell-fallback.spec.ts
+          packages/subprocess/subprocess-local/tests/linux-execve.spec.ts
+          packages/subprocess/subprocess-local/tests/control.spec.ts
+          packages/subprocess/subprocess-local/tests/spawn.spec.ts
+          --testTimeout=30000
+
   publisher-isolated:
     strategy:
       max-parallel: 1
@@ -667,7 +695,7 @@ jobs:
           && github.event.pull_request.user.login != 'dependabot[bot]'
           && fromJSON('["self-hosted", "linux", "x64", "vm-backup"]')
           || 'ubuntu-latest' }}
-    needs: [publisher-isolated, node-24, node-24-coverage, node-24-lint, node-24-bench, node-24-consumers, node-compat]
+    needs: [publisher-isolated, subprocess-macos, node-24, node-24-coverage, node-24-lint, node-24-bench, node-24-consumers, node-compat]
     if: ${{ !cancelled() && github.event_name == 'pull_request' }}
     steps:
       - name: Fail if any needed job did not succeed
