@@ -57,41 +57,72 @@ jobs:
           source = path.read_text()
           before = '          const beforeTask = await taskMs(cdp)'
           after = '          const streamTask = await taskMs(cdp) - beforeTask'
+          setup = '        try {\n          const page = await newEnglishPage(browser)'
+          cleanup = '          await browser.close().catch((error: unknown) => failures.push(error))'
           assert source.count(before) == 1
           assert source.count(after) == 1
+          assert source.count(setup) == 1
+          assert source.count(cleanup) == 1
           assert source.count('const SAMPLES = 3') == 1
+          helpers = [
+              "let finishStyleTrace: (() => Promise<void>) | undefined",
+              "let profileCdp: CDPSession | undefined",
+              "const profileDeadline = async <T,>(operation: Promise<T>, label: string): Promise<T> => {",
+              "  let timeout: ReturnType<typeof setTimeout> | undefined",
+              "  try { return await Promise.race([operation, new Promise<never>((_, reject) => { timeout = setTimeout(() => reject(new Error(`diagnostic ${label} exceeded 10 seconds`)), 10000) })]) } finally { clearTimeout(timeout) }",
+              "}",
+          ]
           start = [
               "const styleTrace: unknown[] = []",
               "const receiveTrace = (event: { value: unknown[] }) => { for (const item of event.value) styleTrace.push(item) }",
               "cdp.on('Tracing.dataCollected', receiveTrace)",
-              "const profileScripts = new Map<string, { url: string; sourceMapURL: string | undefined }>()",
-              "cdp.on('Debugger.scriptParsed', (event: { scriptId: string; url: string; sourceMapURL?: string }) => { profileScripts.set(event.scriptId, { url: event.url, sourceMapURL: event.sourceMapURL }) })",
-              "await cdp.send('Debugger.enable')",
               "await cdp.send('Tracing.start', { categories: 'devtools.timeline,disabled-by-default-blink.debug,disabled-by-default-devtools.timeline.invalidationTracking', transferMode: 'ReportEvents' })",
-              "await cdp.send('Profiler.enable')",
-              "await cdp.send('Profiler.setSamplingInterval', { interval: 1000 })",
-              "await cdp.send('Profiler.start')",
-              "const profileMetricsBefore = (await cdp.send('Performance.getMetrics')).metrics",
+              "const traceStarted = performance.now()",
+              "let traceTimer: ReturnType<typeof setTimeout> | undefined",
+              "let traceFinalization: Promise<void> | undefined",
+              "finishStyleTrace = () => traceFinalization ??= (async () => {",
+              "  clearTimeout(traceTimer)",
+              "  const stopRequested = performance.now()",
+              "  let traceComplete = false",
+              "  let traceError: string | null = null",
+              "  const completion = Promise.withResolvers<void>()",
+              "  const onTraceComplete = () => { traceComplete = true; completion.resolve() }",
+              "  cdp.once('Tracing.tracingComplete', onTraceComplete)",
+              "  try { await profileDeadline(Promise.all([cdp.send('Tracing.end'), completion.promise]), 'trace collection') } catch (error) { traceError = error instanceof Error ? error.message : String(error); throw error } finally {",
+              "    cdp.off('Tracing.tracingComplete', onTraceComplete)",
+              "    cdp.off('Tracing.dataCollected', receiveTrace)",
+              "    await writeFile(join(process.env['DSH_PROFILE_OUTPUT']!, `browser-${sample}-style-trace.json`), JSON.stringify({ traceEvents: styleTrace }))",
+              "    await writeFile(join(process.env['DSH_PROFILE_OUTPUT']!, `browser-${sample}-trace-window.json`), JSON.stringify({ sample, requestedWindowMs: 1000, elapsedBeforeStopMs: stopRequested - traceStarted, elapsedUntilCollectedMs: performance.now() - traceStarted, traceComplete, traceError }))",
+              "  }",
+              "})()",
+              "traceTimer = setTimeout(() => { void finishStyleTrace!().catch((error: unknown) => { /* Finally awaits this same rejected promise. */ void error }) }, 1000)",
           ]
-          stop = [
-              "const profileMetricsAfter = (await cdp.send('Performance.getMetrics')).metrics",
-              "const cpuProfile = await cdp.send('Profiler.stop')",
-              "const traceFinished = new Promise<void>(resolve => cdp.once('Tracing.tracingComplete', () => resolve()))",
-              "await cdp.send('Tracing.end')",
-              "await traceFinished",
-              "cdp.off('Tracing.dataCollected', receiveTrace)",
-              "await writeFile(join(process.env['DSH_PROFILE_OUTPUT']!, `browser-${sample}-style-trace.json`), JSON.stringify({ traceEvents: styleTrace }))",
-              "for (const [scriptId, metadata] of profileScripts) {",
-              "  if (!metadata.url.includes('/plugins/??')) continue",
-              "  const source = await cdp.send('Debugger.getScriptSource', { scriptId })",
-              "  await writeFile(join(process.env['DSH_PROFILE_OUTPUT']!, `browser-${sample}-plugin-${scriptId}.js`), source.scriptSource)",
-              "  await writeFile(join(process.env['DSH_PROFILE_OUTPUT']!, `browser-${sample}-plugin-${scriptId}.json`), JSON.stringify(metadata))",
+          stop = ["await finishStyleTrace()"]
+          save = [
+              "await finishStyleTrace?.().catch((error: unknown) => failures.push(error))",
+              "if (profileCdp) {",
+              "  const sourceCdp = profileCdp",
+              "  const profileScripts = new Map<string, { url: string; sourceMapURL: string | undefined }>()",
+              "  const receiveScript = (event: { scriptId: string; url: string; sourceMapURL?: string }) => { profileScripts.set(event.scriptId, { url: event.url, sourceMapURL: event.sourceMapURL }) }",
+              "  sourceCdp.on('Debugger.scriptParsed', receiveScript)",
+              "  try {",
+              "    await profileDeadline((async () => {",
+              "      await sourceCdp.send('Debugger.enable')",
+              "      for (const [scriptId, metadata] of profileScripts) {",
+              "        if (!metadata.url.includes('/plugins/??')) continue",
+              "        const source = await sourceCdp.send('Debugger.getScriptSource', { scriptId })",
+              "        await writeFile(join(process.env['DSH_PROFILE_OUTPUT']!, `browser-${sample}-plugin-${scriptId}.js`), source.scriptSource)",
+              "        await writeFile(join(process.env['DSH_PROFILE_OUTPUT']!, `browser-${sample}-plugin-${scriptId}.json`), JSON.stringify(metadata))",
+              "      }",
+              "    })(), 'script capture')",
+              "  } catch (error) { failures.push(error) } finally { sourceCdp.off('Debugger.scriptParsed', receiveScript) }",
               "}",
-              "await writeFile(join(process.env['DSH_PROFILE_OUTPUT']!, `browser-${sample}.cpuprofile`), JSON.stringify(cpuProfile.profile))",
-              "await writeFile(join(process.env['DSH_PROFILE_OUTPUT']!, `browser-${sample}-metrics.json`), JSON.stringify({ sample, before: profileMetricsBefore, after: profileMetricsAfter, streamTask, streamWall }))",
           ]
+          source = source.replace(setup, '\n'.join('        ' + line for line in helpers) + '\n' + setup)
+          source = source.replace(before, '          profileCdp = cdp\n' + before)
           source = source.replace(before, '\n'.join('          ' + line for line in start) + '\n' + before)
           source = source.replace(after, after + '\n' + '\n'.join('          ' + line for line in stop))
+          source = source.replace(cleanup, '\n'.join('          ' + line for line in save) + '\n' + cleanup)
           path.write_text(source)
           PY
           git diff -- benchmarks/long-session-browser/long-session.bench.ts > evidence/instrumentation.patch
