@@ -252,8 +252,9 @@ const packageFileExtras: Readonly<Record<string, readonly string[]>> = {
     'lib/protocol-*.js', 'lib/schemas-*.js', 'lib/stream-security-*.js',
   ],
   // Ordinary native containment ships a path-loaded runner and its shared
-  // runner chunk beside the existing node-pty permission repair.
+  // runner/execve chunks beside the existing node-pty permission repair.
   '@deepseek-ai/dsh-subprocess-local': [
+    'lib/linux-execve-*.js',
     'lib/runner.js',
     'lib/runner-*.js',
     'lib/output.js',
