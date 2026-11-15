@@ -1,0 +1,129 @@
+name: Fixed-head performance profiles
+
+# Attribution only: instrumented durations never replace the required budgets.
+on:
+  push:
+    branches: [codex/browser-stream-profile]
+
+permissions:
+  contents: read
+
+env:
+  DSH_TELEMETRY_DISABLED: '1'
+  DSH_GATE_VERBOSE: '1'
+
+jobs:
+  profile:
+    if: github.repository == 'Delta3Palash/deepseek-harness'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          ref: 724a9e3ec0a344a5aec6bbbee0c0af247dae08ee
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@v5.0.0
+        with:
+          dest: ${{ runner.temp }}/performance-profile-pnpm
+
+      - uses: actions/setup-node@v7.0.0
+        with:
+          node-version: 24.22.2
+
+      - name: Record immutable source and host
+        shell: bash
+        run: |
+          mkdir evidence
+          test "$(git rev-parse HEAD)" = 724a9e3ec0a344a5aec6bbbee0c0af247dae08ee
+          git rev-parse HEAD > evidence/source-sha.txt
+          date --iso-8601=seconds > evidence/started.txt
+          lscpu --json > evidence/lscpu.json
+          node --input-type=module -e "import os from 'node:os'; console.log(JSON.stringify({node:process.version,cpus:os.cpus(),availableParallelism:os.availableParallelism(),totalMemory:os.totalmem()},null,2))" > evidence/node-host.json
+
+      - name: Install and build the normal benchmark artifacts
+        shell: bash
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm --filter @deepseek-ai/dsh-benchmarks exec playwright install --with-deps chromium
+          node --import tsx/esm --input-type=module -e "import { buildCiBenchArtifacts } from './scripts/run-ci-bench.ts'; buildCiBenchArtifacts(process.cwd())" 2>&1 | tee evidence/build.log
+
+      - name: Profile the existing projection and reasoning workers once
+        shell: bash
+        run: |
+          output="$GITHUB_WORKSPACE/evidence"
+          fixture=$(mktemp -d /tmp/dsh-projection-profile.XXXXXX)
+          trap 'rm -rf -- "$fixture"' EXIT
+          set +e
+          node --cpu-prof --cpu-prof-interval=100 --cpu-prof-name=projection-cheap.cpuprofile --cpu-prof-dir="$output" --expose-gc benchmarks/.dsh-build/session-corpus/projection-list.worker.js "$fixture" cheap > evidence/projection.stdout.jsonl 2> evidence/projection.stderr.log
+          projection_status=$?
+          node --cpu-prof --cpu-prof-interval=100 --cpu-prof-name=reasoning-16384.cpuprofile --cpu-prof-dir="$output" --expose-gc benchmarks/.dsh-build/conversation-fold/conversation-fold.worker.js streaming reasoning leading-whitespace 262144 16384 > evidence/reasoning.stdout.jsonl 2> evidence/reasoning.stderr.log
+          reasoning_status=$?
+          set -e
+          printf 'projection\t%s\nreasoning\t%s\n' "$projection_status" "$reasoning_status" > evidence/worker-exits.tsv
+          test "$projection_status" -eq 0
+          test "$reasoning_status" -eq 0
+
+      - name: Add diagnostic capture around the existing stream boundary
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('benchmarks/long-session-browser/long-session.bench.ts')
+          source = path.read_text()
+          before = '          const beforeTask = await taskMs(cdp)'
+          after = '          const streamTask = await taskMs(cdp) - beforeTask'
+          assert source.count(before) == 1
+          assert source.count(after) == 1
+          assert source.count('const SAMPLES = 3') == 1
+          start = [
+              "await cdp.send('Profiler.enable')",
+              "await cdp.send('Profiler.setSamplingInterval', { interval: 1000 })",
+              "await cdp.send('Profiler.start')",
+              "const profileMetricsBefore = (await cdp.send('Performance.getMetrics')).metrics",
+          ]
+          stop = [
+              "const profileMetricsAfter = (await cdp.send('Performance.getMetrics')).metrics",
+              "const cpuProfile = await cdp.send('Profiler.stop')",
+              "await writeFile(join(process.env['DSH_PROFILE_OUTPUT']!, `browser-${sample}.cpuprofile`), JSON.stringify(cpuProfile.profile))",
+              "await writeFile(join(process.env['DSH_PROFILE_OUTPUT']!, `browser-${sample}-metrics.json`), JSON.stringify({ sample, before: profileMetricsBefore, after: profileMetricsAfter, streamTask, streamWall }))",
+          ]
+          source = source.replace(before, '\n'.join('          ' + line for line in start) + '\n' + before)
+          source = source.replace(after, after + '\n' + '\n'.join('          ' + line for line in stop))
+          path.write_text(source)
+          PY
+          git diff -- benchmarks/long-session-browser/long-session.bench.ts > evidence/instrumentation.patch
+          test "$(git diff --name-only | wc -l)" -eq 1
+
+      - name: Profile all three existing browser samples with assertions intact
+        shell: bash
+        env:
+          DSH_PROFILE_OUTPUT: ${{ github.workspace }}/evidence
+        run: |
+          set +e
+          pnpm exec vitest run --config vitest.bench.config.ts --no-file-parallelism --maxWorkers=1 benchmarks/long-session-browser/long-session.bench.ts -t 'opens, pages, navigates and streams into a 240-turn browser history' 2>&1 | tee evidence/browser-profile.log
+          statuses=("${PIPESTATUS[@]}")
+          set -e
+          printf '%s\n' "${statuses[0]}" > evidence/browser-exit.txt
+          test "${statuses[1]}" -eq 0
+          # Preserve an instrumented failure; do not pretend it is a normal gate.
+          exit "${statuses[0]}"
+
+      - name: Preserve source maps for attribution
+        if: always()
+        shell: bash
+        run: |
+          find packages vendor -type d -name node_modules -prune -o -type f -path '*/lib/*' \( -name '*.js' -o -name '*.js.map' \) -print0 > evidence/map-inputs.list0
+          find benchmarks/.dsh-build apps/web/dist -type f \( -name '*.js' -o -name '*.js.map' \) -print0 >> evidence/map-inputs.list0
+          tar --null --files-from=evidence/map-inputs.list0 -czf evidence/built-code-and-maps.tar.gz
+          date --iso-8601=seconds > evidence/finished.txt
+
+      - name: Upload profiles, source maps and unchanged assertion outcomes
+        if: always()
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: fixed-head-performance-profiles
+          path: evidence/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
