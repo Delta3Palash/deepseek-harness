@@ -1,8 +1,9 @@
 import { mountWorkingDirectoryFixture } from '../../subagent/tests/working-directory-fixture.ts'
 import { randomUUID } from 'node:crypto'
 import { startExternalActivation, externalTestParent } from '../../subagent/tests/external-activation-helpers.ts'
-import { readFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
+import { tmpdir } from 'node:os'
 import { PassThrough } from 'node:stream'
 import { fileURLToPath } from 'node:url'
 import type {
@@ -508,6 +509,7 @@ describe('task admission and package contracts', () => {
     const safeFiber = await ctx.plugin(claudeCode, {
       providerName: 'claude-safe',
       model: 'claude-safe-model',
+      pathToClaudeCodeExecutable: process.execPath,
       env: { DSH_CLAUDE_INSTANCE: 'safe' },
       permissionMode: 'dontAsk',
       disposeGraceMs: 11,
@@ -552,6 +554,8 @@ describe('task admission and package contracts', () => {
       { instance: 'safe', model: 'claude-safe-model', permissionMode: 'dontAsk' },
       { instance: 'bypass', model: 'claude-bypass-model', permissionMode: 'bypassPermissions' },
     ])
+    expect(queryOptions[0]?.pathToClaudeCodeExecutable).toBe(process.execPath)
+    expect(queryOptions[1]).not.toHaveProperty('pathToClaudeCodeExecutable')
     expect(spawnSpecs.map(spec => ({
       instance: spec.env?.DSH_CLAUDE_INSTANCE,
       graceMs: spec.graceMs,
@@ -592,6 +596,10 @@ describe('task admission and package contracts', () => {
   it('accepts an optional non-empty model and the five fixed permission modes', () => {
     expect(claudeCode.Config({}).providerName).toBe('claude-code')
     expect(claudeCode.Config({}).model).toBeUndefined()
+    expect(claudeCode.Config({}).pathToClaudeCodeExecutable).toBeUndefined()
+    expect(claudeCode.Config({ pathToClaudeCodeExecutable: process.execPath }).pathToClaudeCodeExecutable)
+      .toBe(process.execPath)
+    expect(() => claudeCode.Config({ pathToClaudeCodeExecutable: '' })).toThrow()
     expect(claudeCode.Config({ providerName: 'claude-safe' }).providerName)
       .toBe('claude-safe')
     expect(() => claudeCode.Config({ providerName: '' })).toThrow()
@@ -833,6 +841,50 @@ describe('official spawn projection', () => {
 })
 
 describe('query options and result mapping', () => {
+  it('preserves an explicit native executable path without a shell or PATH lookup', ({ onTestFinished }) => {
+    const directory = mkdtempSync(resolve(tmpdir(), 'dsh-claude-executable-'))
+    onTestFinished(() => { rmSync(directory, { recursive: true, force: true }) })
+    const executable = resolve(directory, process.platform === 'win32' ? 'native worker.exe' : 'native worker')
+    writeFileSync(executable, 'fixture executable is never launched')
+    chmodSync(executable, 0o700)
+    const fixture = fakeRun()
+    const options = claudeQueryOptions({ ...fixture.spec, pathToClaudeCodeExecutable: executable },
+      new AbortController(), () => {}, () => {})
+    expect(options.pathToClaudeCodeExecutable).toBe(executable)
+    expect(options.spawnClaudeCodeProcess).toBeTypeOf('function')
+    expect(queryMock).not.toHaveBeenCalled()
+    expect(fixture.spawnSpecs).toEqual([])
+  })
+
+  it('rejects relative, wrapper, missing, and directory executables before SDK query or spawn', async ({ onTestFinished }) => {
+    const directory = mkdtempSync(resolve(tmpdir(), 'dsh-claude-executable-refusal-'))
+    onTestFinished(() => { rmSync(directory, { recursive: true, force: true }) })
+    const fixture = fakeRun()
+    const executableDirectory = resolve(directory, 'directory.exe')
+    mkdirSync(executableDirectory)
+    const badPaths = [
+      'claude', 'claude --model example', './claude',
+      ...['cmd', 'bat', 'ps1', 'sh', 'js', 'mjs'].map(extension => resolve(directory, `wrapper.${extension}`)),
+      resolve(directory, 'missing.exe'), directory, executableDirectory,
+    ]
+    for (const pathToClaudeCodeExecutable of badPaths) {
+      await expect(startClaudeCodeRun(request(), { ...fixture.spec, pathToClaudeCodeExecutable })).rejects.toThrow()
+    }
+    expect(queryMock).not.toHaveBeenCalled()
+    expect(fixture.spawnSpecs).toEqual([])
+  })
+
+  it.skipIf(process.platform === 'win32')('rejects a non-executable POSIX file before query startup', async ({ onTestFinished }) => {
+    const directory = mkdtempSync(resolve(tmpdir(), 'dsh-claude-not-executable-'))
+    onTestFinished(() => { rmSync(directory, { recursive: true, force: true }) })
+    const executable = resolve(directory, 'native')
+    writeFileSync(executable, 'not executable', { mode: 0o600 })
+    const fixture = fakeRun()
+    await expect(startClaudeCodeRun(request(), { ...fixture.spec, pathToClaudeCodeExecutable: executable })).rejects.toThrow()
+    expect(queryMock).not.toHaveBeenCalled()
+    expect(fixture.spawnSpecs).toEqual([])
+  })
+
   it('builds the fixed unattended options over the scrubbed environment', async () => {
     vi.stubEnv('HOST_VISIBLE', 'visible')
     vi.stubEnv('HOST_SECRET_TOKEN', 'must-not-leak')

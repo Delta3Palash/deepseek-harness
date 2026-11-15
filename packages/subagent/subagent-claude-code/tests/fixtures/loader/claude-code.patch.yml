@@ -21,6 +21,7 @@
       config:
         providerName: claude-primary
         model: claude-primary-model
+        pathToClaudeCodeExecutable: !!js process.execPath
 
     - id: subagent-claude-secondary
       name: '@deepseek-ai/dsh-subagent-claude-code'

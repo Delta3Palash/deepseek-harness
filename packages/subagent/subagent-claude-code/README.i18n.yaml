@@ -9,8 +9,8 @@
   en: 58cca9655f3f81ea
   zh: 0a33d9a4ed461350
 /deepseek-ai-dsh-subagent-claude-code/summary:
-  en: 498d97a8dd913e53
-  zh: d76f0cd25940c540
+  en: ff68eef6dd705553
+  zh: a974f3e1190c0f9f
 /deepseek-ai-dsh-subagent-claude-code/table-of-contents:
   en: d152484eb41ac6b4
   zh: 09388d293f9be9cb
@@ -21,8 +21,8 @@
   en: cf4a7e48ca796066
   zh: d9140d0fda7b7029
 /deepseek-ai-dsh-subagent-claude-code/use-this-package/configuration:
-  en: fbee5e4ab396c184
-  zh: dcf94832918d5010
+  en: cae335738ca0fd54
+  zh: 93ecc36a82c57b7a
 /deepseek-ai-dsh-subagent-claude-code/use-this-package/exposing-the-tool:
   en: e070599b4ff8dd79
   zh: 105e7a4dfee82efe
@@ -30,14 +30,14 @@
   en: a731eabea54893d5
   zh: e370dba101b3a7e8
 /deepseek-ai-dsh-subagent-claude-code/use-this-package/failure-and-recovery:
-  en: 3cfe78175e68269e
-  zh: 478666ce1fcb4e59
+  en: 5162ac409f357c82
+  zh: 3eb943a40a781168
 /deepseek-ai-dsh-subagent-claude-code/understand-the-implementation:
   en: a04818121f31d222
   zh: 2ed476ab086c1686
 /deepseek-ai-dsh-subagent-claude-code/understand-the-implementation/design-concept:
-  en: c01f4a013f7f1a2f
-  zh: 92221e45d438334d
+  en: fa17a967513497d6
+  zh: 7061567ef240383c
 /deepseek-ai-dsh-subagent-claude-code/understand-the-implementation/source-map:
   en: 4826e5016f7d9655
   zh: 9b80696313be1816
@@ -54,8 +54,8 @@
   en: 1796fa78833bfc2b
   zh: d925d4c0d6c46552
 /deepseek-ai-dsh-subagent-claude-code/model-experience/child-request/what-the-model-sees:
-  en: 3edc725966ed48c2
-  zh: 2ec900cc7a4ae459
+  en: 4aa3f8be6d338c02
+  zh: 28cea4ee33b373f0
 /deepseek-ai-dsh-subagent-claude-code/model-experience/child-request/token-effect:
   en: 631f762d31c31a3d
   zh: f32ad086756bf33d
@@ -75,8 +75,8 @@
   en: 19f1316ea4bb1bb9
   zh: 181231ddffdc8494
 /deepseek-ai-dsh-subagent-claude-code/known-limitations-and-deferred-work:
-  en: 421cfbcfb55c7e2b
-  zh: df54ab7743cf6e33
+  en: ed575316e735e555
+  zh: 1ffc0b547f2bd26f
 /deepseek-ai-dsh-subagent-claude-code/known-limitations-and-deferred-work/dev-note:
   en: 185beb4ff55f0946
   zh: 068ca7c57137eb33

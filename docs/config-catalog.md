@@ -3833,6 +3833,8 @@ export interface Config {
   providerName?: string
   /** Native Claude model fixed for this instance; omitted to inherit Claude settings. */
   model?: string
+  /** Absolute native Claude executable path; omitted to use the SDK's pinned runtime. */
+  pathToClaudeCodeExecutable?: string
   /**
    * Explicit environment entries layered over the subprocess seam's
    * credential-scrubbed parent environment.

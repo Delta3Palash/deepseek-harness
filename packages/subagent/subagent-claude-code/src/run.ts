@@ -7,6 +7,8 @@
  */
 
 import { randomUUID } from 'node:crypto'
+import { accessSync, constants, statSync } from 'node:fs'
+import { extname, isAbsolute } from 'node:path'
 import {
   query as officialQuery,
   type Options,
@@ -152,6 +154,8 @@ export interface ClaudeCodeRunSpec {
   readonly cwd: string
   /** Profile-selected native model; omitted to preserve Claude settings. */
   readonly model?: string
+  /** Explicit absolute native executable; omitted to retain the SDK's pinned runtime. */
+  readonly pathToClaudeCodeExecutable?: string
   /** Profile-selected native non-interactive permission mode. */
   readonly permissionMode: ClaudeCodePermissionMode
   /** Explicit deployment/test environment layered after shared scrubbing. */
@@ -322,10 +326,23 @@ export function claudeQueryOptions(
   ) => void,
   captureDiagnostic: (diagnostic: string) => void,
 ): Options {
+  const executable = spec.pathToClaudeCodeExecutable
+  if (executable !== undefined) {
+    if (!isAbsolute(executable)
+      || /\.(?:cmd|bat|ps1|sh|bash|zsh|fish|js|mjs|cjs)$/i.test(executable)
+      || (process.platform === 'win32' && extname(executable).toLowerCase() !== '.exe')) {
+      throw new Error('subagent-claude-code: pathToClaudeCodeExecutable must be an absolute native executable path')
+    }
+    if (!statSync(executable).isFile()) {
+      throw new Error('subagent-claude-code: pathToClaudeCodeExecutable must reference a regular file')
+    }
+    accessSync(executable, constants.X_OK)
+  }
   return {
     abortController: controller,
     cwd: spec.cwd,
     ...spec.model === undefined ? {} : { model: spec.model },
+    ...executable === undefined ? {} : { pathToClaudeCodeExecutable: executable },
     env: { ...scrubbedParentEnv(), ...spec.env },
     persistSession: false,
     disallowedTools: spec.permissionMode === 'plan'
