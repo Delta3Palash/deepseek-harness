@@ -1,0 +1,120 @@
+name: Fixed-head benchmark diagnosis
+
+# One bounded experiment; this branch never supplies a required PR verdict.
+on:
+  push:
+    branches: [codex/benchmark-host-diagnostic]
+
+permissions:
+  contents: read
+
+env:
+  DSH_TELEMETRY_DISABLED: '1'
+  DSH_GATE_VERBOSE: '1'
+
+jobs:
+  matched-baseline:
+    if: github.repository == 'Delta3Palash/deepseek-harness'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Check out candidate A
+        uses: actions/checkout@v7.0.1
+        with:
+          ref: 724a9e3ec0a344a5aec6bbbee0c0af247dae08ee
+          path: candidate
+          persist-credentials: false
+
+      - name: Check out accepted baseline B
+        uses: actions/checkout@v7.0.1
+        with:
+          ref: 39163dd30f703a79079e2d2446545cff3c453738
+          path: baseline
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@v5.0.0
+        with:
+          package_json_file: candidate/package.json
+          dest: ${{ runner.temp }}/benchmark-diagnostic-pnpm
+
+      - uses: actions/setup-node@v7.0.0
+        with:
+          node-version: 24.22.2
+
+      - name: Record host and verify immutable comparison inputs
+        shell: bash
+        run: |
+          mkdir evidence
+          date --iso-8601=seconds > evidence/started.txt
+          uname -a > evidence/uname.txt
+          lscpu --json > evidence/lscpu.json
+          node --input-type=module -e "import os from 'node:os'; console.log(JSON.stringify({node:process.version,platform:process.platform,arch:process.arch,cpus:os.cpus(),availableParallelism:os.availableParallelism(),totalMemory:os.totalmem()},null,2))" > evidence/node-host.json
+          printf '%s\n' 'A=724a9e3ec0a344a5aec6bbbee0c0af247dae08ee' 'B=39163dd30f703a79079e2d2446545cff3c453738' 'order=A,B,B,A' > evidence/plan.txt
+          test "$(git -C candidate rev-parse HEAD)" = 724a9e3ec0a344a5aec6bbbee0c0af247dae08ee
+          test "$(git -C baseline rev-parse HEAD)" = 39163dd30f703a79079e2d2446545cff3c453738
+          cmp candidate/pnpm-lock.yaml baseline/pnpm-lock.yaml
+          for checkout in candidate baseline; do
+            git -C "$checkout" ls-tree -r HEAD -- benchmarks scripts/run-ci-bench.ts scripts/run-bench-suite.ts vitest.bench.config.ts packages/client packages/session > "evidence/$checkout-inputs.txt"
+          done
+          cmp evidence/candidate-inputs.txt evidence/baseline-inputs.txt
+          for file in cpu.max memory.max cpuset.cpus.effective; do
+            if test -r "/sys/fs/cgroup/$file"; then
+              cat "/sys/fs/cgroup/$file" > "evidence/cgroup-$file.txt"
+            fi
+          done
+
+      - name: Install both frozen dependency graphs
+        shell: bash
+        run: |
+          for checkout in candidate baseline; do
+            (cd "$checkout" && pnpm install --frozen-lockfile) 2>&1 | tee "evidence/$checkout-install.log"
+          done
+          (cd candidate && pnpm --filter @deepseek-ai/dsh-benchmarks exec playwright install --with-deps chromium)
+
+      - name: Build both with the existing CI benchmark builder
+        shell: bash
+        run: |
+          for checkout in candidate baseline; do
+            (cd "$checkout" && node --import tsx/esm --input-type=module -e "import { buildCiBenchArtifacts } from './scripts/run-ci-bench.ts'; buildCiBenchArtifacts(process.cwd())") 2>&1 | tee "evidence/$checkout-build.log"
+          done
+
+      - name: Run the fixed ABBA experiment with unchanged complete suites
+        shell: bash
+        run: |
+          printf 'position\tvariant\tsha\texit_code\n' > evidence/outcomes.tsv
+          position=0
+          failed=0
+          for checkout in candidate baseline baseline candidate; do
+            position=$((position + 1))
+            prefix="evidence/$position-$checkout"
+            date --iso-8601=seconds > "$prefix-started.txt"
+            cat /proc/loadavg > "$prefix-load-before.txt"
+            free -b > "$prefix-memory-before.txt"
+            set +e
+            (cd "$checkout" && pnpm run test:bench:built) 2>&1 | tee "$prefix.log"
+            statuses=("${PIPESTATUS[@]}")
+            set -e
+            result=${statuses[0]}
+            test "${statuses[1]}" -eq 0
+            sha=$(git -C "$checkout" rev-parse HEAD)
+            printf '%s\t%s\t%s\t%s\n' "$position" "$checkout" "$sha" "$result" >> evidence/outcomes.tsv
+            date --iso-8601=seconds > "$prefix-finished.txt"
+            cat /proc/loadavg > "$prefix-load-after.txt"
+            if test -d "$checkout/benchmarks/.dsh-report"; then
+              cp -a "$checkout/benchmarks/.dsh-report" "$prefix-report"
+            fi
+            if test "$result" -ne 0; then failed=1; fi
+          done
+          cat evidence/outcomes.tsv
+          # A baseline failure is evidence, never a waiver or a passing verdict.
+          exit "$failed"
+
+      - name: Preserve every observation, including failures
+        if: always()
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: fixed-head-benchmark-diagnosis
+          path: evidence/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
