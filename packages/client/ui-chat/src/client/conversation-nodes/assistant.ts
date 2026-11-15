@@ -156,17 +156,18 @@ function updateChunk(
     visibleByIndex = next
   }
   const firstToken = isTokenDelta(chunk)
+  const firstVisible = visibleBlocks > 0 && state.firstVisibleSeq === undefined
   return {
-    ...state,
+    turn: state.turn,
+    step: state.step,
     blocks,
     visibleByIndex,
     visibleBlocks,
-    ...visibleBlocks > 0 && state.firstVisibleSeq === undefined
-      ? { firstVisibleSeq: seq, firstVisibleTime: time }
-      : {},
-    ...firstToken && state.firstTokenTime === undefined
-      ? { firstTokenTime: time }
-      : {},
+    firstVisibleSeq: firstVisible ? seq : state.firstVisibleSeq,
+    firstVisibleTime: firstVisible ? time : state.firstVisibleTime,
+    firstTokenTime: firstToken && state.firstTokenTime === undefined ? time : state.firstTokenTime,
+    final: state.final,
+    usage: state.usage,
   }
 }
 
