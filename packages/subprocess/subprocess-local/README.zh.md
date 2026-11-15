@@ -42,6 +42,12 @@ kind: "package-reference"
 
 Windows 普通子进程通过 `windowsHide` 启动私有 Job runner，并为原生目标请求隐藏初始窗口。标准流和 Job 归属不依赖窗口可见性；显式创建自身窗口的命令不在此保证范围内。
 
+### 拒绝隐式 shell 回退
+
+普通 spawn 设置 `allowShellFallback: false` 后，可执行格式错误会直接报告，不会把文件交给 shell 重试。Linux scope 启动将该策略传入 exec bootstrap；脱离式 Linux 与 macOS 启动使用私有 libc `execve` bootstrap，保留相同的进程组归属、标准流、可选 fd 7 及启动错误报告。Windows 保持原生进程创建路径。其他本地平台会在目标启动前拒绝此策略。省略或设为 `true` 保留现有启动行为；终端启动不变。
+
+该策略不禁止显式解释器命令或内核识别的 shebang，不验证目标身份，也不增强现有 fallback 进程范围的可见性。原生可执行文件消费方仍负责选择受信任且兼容的二进制文件。
+
 ### 收集输出
 
 收集模式在内存中保留一条流的最后 `maxBytes`——错误与最终结果通常聚集在末尾——并在配置了 `spill` 上限时把完整流追加到 OS 临时目录下每进程目录中的私有文件（`0700` 目录、`0600` 随机命名文件）。某条流大于 spill 上限时，会丢弃不完整的 spill，只返回带截断标记的尾部。spill 是尽力而为：当 spill 文件无法打开或追加（每进程目录被临时文件清理工具删除、`EACCES`、`EMFILE`、`ENOSPC`）时，收集器丢弃该 spill，通过插件 logger 记录一条 `error`，并继续收集内存尾部，因此结果带截断标记且没有 spill 路径。读取基于偏移量且从不消费，因此后台读取与批量读取在退出前后都可以共存。
@@ -93,11 +99,11 @@ Linux 普通进程和终端进程即使在 bootstrap 消费启动请求前被取
 | [`src/spawn.ts`](src/spawn.ts) | 共享进程管道：直接结果、保尾收集、spill 文件与 fallback spawn |
 | [`src/managed-owner.ts`](src/managed-owner.ts) | 每个普通句柄使用的私有信号与等待 owner |
 | [`src/linux-scope.ts`](src/linux-scope.ts) | Linux user-systemd 能力检查、scope 启动、信号发送与完全停稳 |
-| [`src/linux-execve.ts`](src/linux-execve.ts) | Linux libc 进程映像替换与继承标准文件描述符保留 |
+| [`src/linux-execve.ts`](src/linux-execve.ts) | POSIX libc 进程映像替换与继承标准文件描述符保留 |
 | [`src/windows-job.ts`](src/windows-job.ts) | Windows Job 能力检查与 helper 启动 |
 | [`src/runner-launch.ts`](src/runner-launch.ts) | source、built 与 packaged 私有 runner 选择 |
-| [`src/spawn-runner.ts`](src/spawn-runner.ts) | Linux 一次性 exec bootstrap 与 Windows Job runner |
-| [`src/runner-protocol.ts`](src/runner-protocol.ts) | 严格定义的 Linux launch／startup 文件与 Windows IPC 消息 |
+| [`src/spawn-runner.ts`](src/spawn-runner.ts) | POSIX 一次性 exec bootstrap 与 Windows Job runner |
+| [`src/runner-protocol.ts`](src/runner-protocol.ts) | 严格定义的 POSIX launch／startup 文件与 Windows IPC 消息 |
 | [`src/terminal.ts`](src/terminal.ts) | `node-pty` 终端句柄：Linux scope 绑定、前台检查与 fallback 清理 |
 | [`src/process-inspector.ts`](src/process-inspector.ts) | POSIX 进程树与会话检查 |
 | [`src/windows-inspector.ts`](src/windows-inspector.ts) | 经 koffi 的 Windows Toolhelp32 进程表检查 |

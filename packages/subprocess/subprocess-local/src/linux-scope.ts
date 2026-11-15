@@ -679,6 +679,7 @@ export function launchLinuxScope(
   const stdio = runnerStdio(spec, false)
   const files = createLinuxLaunchFiles({
     cwd: spec.cwd, env: targetEnv,
+    ...spec.allowShellFallback === undefined ? {} : { allowShellFallback: spec.allowShellFallback },
     pipeFds: stdio.slice(0, 3).flatMap((disposition, fd) => disposition === 'pipe' ? [fd] : []),
     ...spec.stdio.control === undefined ? {} : { control: spec.stdio.control },
   })

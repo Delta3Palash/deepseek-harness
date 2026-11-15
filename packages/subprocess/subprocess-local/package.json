@@ -33,6 +33,7 @@
   "files": [
     "locale/*.json",
     "lib/index.js",
+    "lib/linux-execve-*.js",
     "lib/runner.js",
     "lib/runner-*.js",
     "lib/output.js",

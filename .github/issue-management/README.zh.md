@@ -8,7 +8,7 @@ description: "面向仓库维护者的 Issue 策略强制范围、Project 访问
 
 ## 摘要
 
-贡献者可以引用 Issue 作为背景，而无需让 PR（Pull Request）校验依赖 Project 可用性。解决型引用还会强制检查 Project Priority。必需的 `Issue policy` job 与独立的生命周期工作流使用受信任的默认分支代码。
+贡献者可以引用 Issue 作为背景，而无需让 PR（Pull Request）校验依赖 Project 可用性。在上游仓库，解决型引用还会强制检查 Project Priority，Project 自动化使用受信任的默认分支代码。Fork 使用下文介绍的只读原生策略。
 
 ## 目录
 
@@ -58,6 +58,12 @@ PR 打开时，工作流按配置时区中的 PR 创建日期，为每个被引�
 
 生命周期处理由事件驱动，不是协调器。被省略的事件不会修复 Project 状态，并发 Project mutation 也没有原子比较并交换保护。选择性求值不重新设计必需检查的权威来源，也不保证已测得的 Actions 分钟节省。[已归档的选择性求值决策](../../.agents/notes/archived/process/2026-09-07-selective-issue-policy-evaluation.md)记录取舍。
 
+无法访问上游组织 Project 的 Fork 使用 [fork-native.mjs](fork-native.mjs)。仓库身份取自 GitHub 事件与 `GITHUB_REPOSITORY`，两者必须一致。强制范围内的 PR 保留相同的 kind、area、引用和进入评审规则。被引用的 Issue 必须具有原生 Type、area 标签、合法的原生打开或关闭状态，且不得使用退役或 PR 专用标签。可选的 `p0`–`p3` Issue 标签提供明确的 Fork Priority，解决型 PR 仍须匹配最高 Priority。不虚构 Project 字段、看板状态转换或 Start Date。维护者与 GitHub 关闭关键词负责原生 Issue 状态，生命周期 job 只读审计，不写入或自动修复标签。
+
+Fork 引导流程执行候选代码，仅授予 Contents、Issues 和 Pull Requests 读取权限，不传入 App 密钥。默认分支最初不含新策略，因此仅检出受信任默认分支无法完成引导。上游 Project job 保持独立；必需的 `Issue policy` 汇总要求适用 job 成功、另一 job 跳过。该只读元数据检查与测试工作流一样可由候选更改，不能替代独立评审门禁。加权批准仍使用受信任默认分支代码及既有批准要求。引导不需要直接修改默认分支。
+
+Fork 测试 lane 使用标准 `ubuntu-24.04` 和 `windows-2025` runner，避免等待不可用的组织专用标签，同时保留显式 PR 故障切换选项、全部既有测试命令与必需结论依赖。其 worker 与分区预算按托管容量降低。仅 master 的串行检查也使用标准 Fork runner，Linux 会安装托管环境所需的浏览器系统依赖。手动选择的大型 runner 基准仍需配置对应资源池。
+
 -----
 
 <a id="module-ownership"></a>
@@ -71,6 +77,8 @@ PR 打开时，工作流按配置时区中的 PR 创建日期，为每个被引�
 [rules.mjs](rules.mjs)拥有纯校验、引用解析、状态决策和日期转换。[github.mjs](github.mjs)拥有凭据选择、REST/GraphQL 传输、Issue/Project 读取，以及 Project 归属与字段写入。
 
 [pull-request.mjs](pull-request.mjs)组装只读 PR 快照，并执行策略预检和校验，包括其工作流输出。[lifecycle.mjs](lifecycle.mjs)复用 PR 引用读取器与共享规则，协调 Project mutation、Issue 标签修复和审计评论。快照读取器不修改 GitHub；共享传输也支持写入，因此导入该模块不会限制调用方权限。
+
+[fork-native.mjs](fork-native.mjs)负责只读原生 Issue 审计与 Fork PR 快照。它复用引用解析及 PR 规则，不查询 ProjectV2，并通过注入仅 GET 的传输进行测试。
 
 </details>
 

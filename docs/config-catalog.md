@@ -3833,6 +3833,8 @@ export interface Config {
   providerName?: string
   /** Native Claude model fixed for this instance; omitted to inherit Claude settings. */
   model?: string
+  /** Absolute native Claude executable path; omitted to use the SDK's pinned runtime. */
+  pathToClaudeCodeExecutable?: string
   /**
    * Explicit environment entries layered over the subprocess seam's
    * credential-scrubbed parent environment.
@@ -3876,6 +3878,8 @@ export interface Config {
   env?: Record<string, string>
   /** Native non-interactive permission mode fixed for this Provider instance. */
   permissionMode?: CodexPermissionMode
+  /** Explicit read-only native sandbox; requires permissionMode never. Omission preserves native defaults. */
+  sandbox?: 'read-only'
   /** Grace in milliseconds between app-server managed-range termination tiers. */
   disposeGraceMs?: number
 }

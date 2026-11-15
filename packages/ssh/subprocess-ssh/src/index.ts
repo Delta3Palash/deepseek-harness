@@ -272,6 +272,12 @@ export class SshSubprocessRuntime extends SubprocessRuntime {
   }
 
   override spawn(spec: SubprocessSpawnSpec): SubprocessHandle {
+    if (spec.allowShellFallback !== undefined && typeof spec.allowShellFallback !== 'boolean') {
+      throw new Error('subprocess allowShellFallback must be a boolean when supplied')
+    }
+    if (spec.allowShellFallback === false) {
+      throw new Error('subprocess-ssh cannot disable remote shell fallback; use a provider with direct exec support')
+    }
     this.lifetime.signal.throwIfAborted()
     spec.signal?.throwIfAborted()
     const handle = new RemoteProcess(this.ctx.ssh, spec)

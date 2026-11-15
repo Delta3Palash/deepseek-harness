@@ -7,6 +7,8 @@
  */
 
 import { randomUUID } from 'node:crypto'
+import { accessSync, closeSync, constants, openSync, readSync, statSync } from 'node:fs'
+import { extname, isAbsolute } from 'node:path'
 import {
   query as officialQuery,
   type Options,
@@ -152,6 +154,8 @@ export interface ClaudeCodeRunSpec {
   readonly cwd: string
   /** Profile-selected native model; omitted to preserve Claude settings. */
   readonly model?: string
+  /** Explicit absolute native executable; omitted to retain the SDK's pinned runtime. */
+  readonly pathToClaudeCodeExecutable?: string
   /** Profile-selected native non-interactive permission mode. */
   readonly permissionMode: ClaudeCodePermissionMode
   /** Explicit deployment/test environment layered after shared scrubbing. */
@@ -305,6 +309,94 @@ export async function disposeClaudeCodeChild(
   await child.done.catch(() => {})
 }
 
+/** Recognize a bounded, structured host executable header, without proving loader compatibility. */
+function hasNativeExecutableHeader(descriptor: number, size: number): boolean {
+  const readHeader = (position: number, length: number): Buffer => {
+    const bytes = Buffer.alloc(length)
+    return bytes.subarray(0, readSync(descriptor, bytes, 0, length, position))
+  }
+  const header = readHeader(0, 64)
+  if (header.length < 28) return false
+  const magic = header.subarray(0, 4).toString('hex')
+  if (process.platform === 'win32') {
+    if (header.length !== 64 || header.readUInt16LE(0) !== 0x5a4d) return false
+    const offset = header.readUInt32LE(60)
+    if (offset < 64 || offset > size - 26) return false
+    const pe = readHeader(offset, 26)
+    if (pe.length !== 26 || pe.readUInt32LE(0) !== 0x00004550) return false
+    const sections = pe.readUInt16LE(6)
+    const optionalSize = pe.readUInt16LE(20)
+    const characteristics = pe.readUInt16LE(22)
+    const optionalMagic = pe.readUInt16LE(24)
+    const minimumOptionalSize = optionalMagic === 0x10b ? 96 : optionalMagic === 0x20b ? 112 : 0
+    return pe.readUInt16LE(4) !== 0 && sections > 0
+      && (characteristics & 0x0002) !== 0 && (characteristics & 0x2000) === 0
+      && minimumOptionalSize > 0 && optionalSize >= minimumOptionalSize
+      && offset + 24 + optionalSize + sections * 40 <= size
+  }
+  if (process.platform === 'linux') {
+    if (magic !== '7f454c46' || ![1, 2].includes(header.readUInt8(4))
+      || ![1, 2].includes(header.readUInt8(5)) || header[6] !== 1
+      || !header.subarray(9, 16).every(byte => byte === 0)) return false
+    const little = header[5] === 1
+    const u16 = (offset: number): number => little ? header.readUInt16LE(offset) : header.readUInt16BE(offset)
+    const u32 = (offset: number): number => little ? header.readUInt32LE(offset) : header.readUInt32BE(offset)
+    const is64 = header[4] === 2
+    const headerSize = is64 ? 64 : 52
+    if (header.length < headerSize || ![2, 3].includes(u16(16)) || u16(18) === 0 || u32(20) !== 1) return false
+    const offset = is64
+      ? (little ? header.readBigUInt64LE(32) : header.readBigUInt64BE(32))
+      : BigInt(u32(28))
+    const count = u16(is64 ? 56 : 44)
+    const entrySize = is64 ? 56 : 32
+    if (u16(is64 ? 52 : 40) !== headerSize || u16(is64 ? 54 : 42) !== entrySize
+      || count === 0 || offset < BigInt(headerSize)
+      || offset + BigInt(count * entrySize) > BigInt(size)) return false
+    // The format's uint16 count bounds this table below 4 MiB.
+    const programs = readHeader(Number(offset), count * entrySize)
+    if (programs.length !== count * entrySize) return false
+    const p32 = (position: number): number => little ? programs.readUInt32LE(position) : programs.readUInt32BE(position)
+    const p64 = (position: number): bigint => little ? programs.readBigUInt64LE(position) : programs.readBigUInt64BE(position)
+    let executableLoad = false
+    for (let index = 0; index < count; index++) {
+      const start = index * entrySize
+      if (p32(start) !== 1) continue // PT_LOAD
+      const fileOffset = is64 ? p64(start + 8) : BigInt(p32(start + 4))
+      const fileSize = is64 ? p64(start + 32) : BigInt(p32(start + 16))
+      const memorySize = is64 ? p64(start + 40) : BigInt(p32(start + 20))
+      if (fileSize > memorySize || fileOffset + fileSize > BigInt(size)) return false
+      if (fileSize > 0n && (p32(start + (is64 ? 4 : 24)) & 1) !== 0) executableLoad = true
+    }
+    return executableLoad
+  }
+  if (process.platform !== 'darwin') return false
+  const isMachO = (bytes: Buffer, sliceSize: number): boolean => {
+    if (bytes.length < 28) return false
+    const signature = bytes.subarray(0, 4).toString('hex')
+    if (!['feedface', 'cefaedfe', 'feedfacf', 'cffaedfe'].includes(signature)) return false
+    const little = signature === 'cefaedfe' || signature === 'cffaedfe'
+    const u32 = (offset: number): number => little ? bytes.readUInt32LE(offset) : bytes.readUInt32BE(offset)
+    const headerSize = signature === 'feedfacf' || signature === 'cffaedfe' ? 32 : 28
+    if (bytes.length < headerSize || u32(4) === 0 || u32(12) !== 2) return false
+    const commands = u32(16)
+    const commandBytes = u32(20)
+    return commands > 0 && commandBytes >= commands * 8 && headerSize + commandBytes <= sliceSize
+      && (headerSize !== 32 || u32(28) === 0)
+  }
+  if (!['cafebabe', 'bebafeca', 'cafebabf', 'bfbafeca'].includes(magic)) return isMachO(header, size)
+  const little = magic === 'bebafeca' || magic === 'bfbafeca'
+  const u32 = (offset: number): number => little ? header.readUInt32LE(offset) : header.readUInt32BE(offset)
+  const u64 = (offset: number): bigint => little ? header.readBigUInt64LE(offset) : header.readBigUInt64BE(offset)
+  const is64 = magic === 'cafebabf' || magic === 'bfbafeca'
+  const count = u32(4)
+  const tableSize = 8 + count * (is64 ? 32 : 20)
+  if (count === 0 || tableSize > size || header.length < (is64 ? 40 : 28)) return false
+  const offset = is64 ? u64(16) : BigInt(u32(16))
+  const sliceSize = is64 ? u64(24) : BigInt(u32(20))
+  if (offset < BigInt(tableSize) || sliceSize < 28n || offset + sliceSize > BigInt(size)) return false
+  return isMachO(readHeader(Number(offset), Number(sliceSize < 32n ? sliceSize : 32n)), Number(sliceSize))
+}
+
 /**
  * Build the fixed official SDK options for one one-shot provider run.
  * @param spec - Workspace, environment, process service, and disposal policy.
@@ -322,10 +414,32 @@ export function claudeQueryOptions(
   ) => void,
   captureDiagnostic: (diagnostic: string) => void,
 ): Options {
+  const executable = spec.pathToClaudeCodeExecutable
+  if (executable !== undefined) {
+    if (!isAbsolute(executable)
+      || /\.(?:cmd|bat|ps1|sh|bash|zsh|fish|js|mjs|cjs)$/i.test(executable)
+      || (process.platform === 'win32' && extname(executable).toLowerCase() !== '.exe')) {
+      throw new Error('subagent-claude-code: pathToClaudeCodeExecutable must be an absolute native executable path')
+    }
+    const executableStat = statSync(executable)
+    if (!executableStat.isFile()) {
+      throw new Error('subagent-claude-code: pathToClaudeCodeExecutable must reference a regular file')
+    }
+    accessSync(executable, constants.X_OK)
+    const descriptor = openSync(executable, 'r')
+    try {
+      // Inspect the target file, including through symlinks; names alone do not
+      // distinguish native executables from extensionless script wrappers.
+      if (!hasNativeExecutableHeader(descriptor, executableStat.size)) {
+        throw new Error('subagent-claude-code: pathToClaudeCodeExecutable must contain a native executable header, not a script')
+      }
+    } finally { closeSync(descriptor) }
+  }
   return {
     abortController: controller,
     cwd: spec.cwd,
     ...spec.model === undefined ? {} : { model: spec.model },
+    ...executable === undefined ? {} : { pathToClaudeCodeExecutable: executable },
     env: { ...scrubbedParentEnv(), ...spec.env },
     persistSession: false,
     disallowedTools: spec.permissionMode === 'plan'
@@ -368,7 +482,10 @@ export function claudeQueryOptions(
     },
     supportedDialogKinds: SUPPORTED_UNATTENDED_DIALOG_KINDS,
     spawnClaudeCodeProcess: (options: SpawnOptions) => {
-      const child = spec.spawn(claudeSpawnSpec(options, spec.disposeGraceMs))
+      const child = spec.spawn({
+        ...claudeSpawnSpec(options, spec.disposeGraceMs),
+        ...executable === undefined ? {} : { allowShellFallback: false },
+      })
       const process = new ManagedClaudeCodeProcess(child)
       capture(child, process)
       return process

@@ -2,8 +2,40 @@ import { spawnSync } from 'node:child_process'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 afterEach(() => {
+  vi.restoreAllMocks()
   vi.doUnmock('@deepseek-ai/dsh-lazy-require')
   vi.resetModules()
+})
+
+it.each([
+  { platform: 'linux', nonblock: 0x800 },
+  { platform: 'darwin', nonblock: 0x4 },
+] as const)('uses $platform descriptor flags without a shell retry', async ({ platform, nonblock }) => {
+  const nativeExecve = vi.fn(() => -1)
+  const nativeFcntl = vi.fn((_fd: number, command: number) => command === 3 ? nonblock | 2 : command === 1 ? 1 : 0)
+  vi.doMock('@deepseek-ai/dsh-lazy-require', () => ({
+    createLazyRequire: () => () => ({ errno: () => 2, load: () => ({
+      func: (declaration: string) => declaration.includes('execve') ? nativeExecve : nativeFcntl,
+    }) }),
+  }))
+  const { loadPosixExecve } = await import('../src/linux-execve.ts')
+  vi.spyOn(process, 'platform', 'get').mockReturnValue(platform)
+  expect(() => loadPosixExecve()('/native', ['native'], {}, 'pipe', [0, 2])).toThrow()
+  const argumentPrefix = platform === 'darwin' ? ['int'] : []
+  expect(nativeFcntl).toHaveBeenCalledWith(7, 2, ...argumentPrefix, 0)
+  expect(nativeFcntl).toHaveBeenCalledWith(0, 4, ...argumentPrefix, 2)
+  expect(nativeFcntl).toHaveBeenCalledWith(2, 4, ...argumentPrefix, 2)
+  expect(nativeFcntl).not.toHaveBeenCalledWith(1, 3, ...argumentPrefix, 0)
+  expect(nativeExecve).toHaveBeenCalledExactlyOnceWith('/native', ['native', null], [null])
+})
+
+it('refuses unsupported direct-exec platforms without loading native bindings', async () => {
+  const load = vi.fn()
+  vi.doMock('@deepseek-ai/dsh-lazy-require', () => ({ createLazyRequire: () => load }))
+  const { loadPosixExecve } = await import('../src/linux-execve.ts')
+  vi.spyOn(process, 'platform', 'get').mockReturnValue('aix')
+  expect(() => loadPosixExecve()).toThrow('supported only on Linux and macOS')
+  expect(load).not.toHaveBeenCalled()
 })
 
 describe.skipIf(process.platform !== 'linux')('Linux libc execve binding', () => {

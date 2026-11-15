@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import test from 'node:test'
 
 import { api, graphql, initializeIssueStartDate, issueSnapshot } from './github.mjs'
+import { runForkNativePolicy, validateNativeIssue } from './fork-native.mjs'
 import { auditIssue, initializePullRequestStartDates, repairIssueLabels, runLifecycle } from './lifecycle.mjs'
 import {
   lifecyclePullRequestSnapshot,
@@ -992,9 +993,12 @@ test('performs no lifecycle requests for removed signals or title-only edits', a
 
 test('keeps trusted preflight before token minting and required policy unconditional', () => {
   const source = readFileSync(new URL('../workflows/issue-policy.yml', import.meta.url), 'utf8')
-  const job = source.slice(source.indexOf('  policy:'))
-  assert.ok(job.includes('    name: Issue policy'))
-  assert.ok(!job.slice(0, job.indexOf('    steps:')).includes('    if:'))
+  const job = source.slice(source.indexOf('  project-policy:'), source.indexOf('  fork-policy:'))
+  const verdict = source.slice(source.indexOf('  policy:'))
+  assert.ok(verdict.includes('    name: Issue policy'))
+  assert.ok(verdict.includes('    if: always()'))
+  assert.ok(verdict.includes('    needs: [project-policy, fork-policy]'))
+  assert.ok(job.includes('    if: ${{ !github.event.repository.fork }}'))
   assert.ok(source.includes('types: [opened, edited, synchronize, reopened, labeled, unlabeled, ready_for_review, review_requested]'))
   const steps = job.split('      - name: ').slice(1)
   assert.equal(steps.length, 4)
@@ -1173,4 +1177,130 @@ test('allows missing Priority only when resolving Issues are also unprioritized'
       '有 Priority 的解决型 PR 要求每个被解决 Issue 都设置 Priority',
     ),
   )
+})
+
+const forkRepository = 'example/harness-fork'
+
+test('required Issue policy verdict rejects failed, cancelled, skipped, and misrouted applicable jobs', () => {
+  const source = readFileSync(new URL('../workflows/issue-policy.yml', import.meta.url), 'utf8')
+  const verdict = source.slice(source.indexOf('  policy:'))
+  const match = verdict.match(/node --input-type=module <<'NODE'\n([\s\S]*?)          NODE/)
+  assert.ok(match, 'required verdict must expose its dependency-free Node entry')
+  const script = match[1].split('\n').map((line) => line.slice(10)).join('\n')
+  for (const IS_FORK of ['true', 'false', '']) {
+    for (const FORK_RESULT of ['success', 'failure', 'cancelled', 'skipped']) {
+      for (const PROJECT_RESULT of ['success', 'failure', 'cancelled', 'skipped']) {
+        const expected = IS_FORK === 'true'
+          ? FORK_RESULT === 'success' && PROJECT_RESULT === 'skipped'
+          : IS_FORK === 'false' && PROJECT_RESULT === 'success' && FORK_RESULT === 'skipped'
+        const result = spawnSync(process.execPath, ['--input-type=module', '-e', script], {
+          env: { IS_FORK, FORK_RESULT, PROJECT_RESULT }, encoding: 'utf8', timeout: 30_000,
+        })
+        assert.equal(result.error, undefined)
+        assert.equal(result.signal, null)
+        assert.equal(result.status, expected ? 0 : 1, `${IS_FORK}/${FORK_RESULT}/${PROJECT_RESULT}: ${result.stderr}`)
+      }
+    }
+  }
+})
+
+const nativeIssue = () => ({
+  number: 2, labels: [{ name: 'area/hooks' }], type: { name: 'Feature' }, state: 'open', state_reason: null,
+})
+function forkFixture({ pull = {}, issue = {}, requests = { users: [{ login: 'reviewer' }], teams: [] }, reviews = [] } = {}) {
+  const paths = []
+  const repository = { full_name: forkRepository, fork: true }
+  const prefix = `/repos/${forkRepository}`
+  const data = new Map([
+    [`${prefix}/pulls/1`, { draft: false, user: { type: 'User' }, labels: [{ name: 'kind/feature' }, { name: 'area/hooks' }], body: 'Fixes #2', ...pull }],
+    [`${prefix}/pulls/1/requested_reviewers`, requests],
+    [`${prefix}/pulls/1/reviews?per_page=100`, reviews],
+    [`${prefix}/issues/2`, { ...nativeIssue(), ...issue }],
+  ])
+  const read = async (...args) => {
+    assert.equal(args.length, 1, 'native policy must not pass mutation options')
+    const [path] = args
+    paths.push(path)
+    assert.ok(path.startsWith(`${prefix}/`), 'all requests target this fork')
+    assert.ok(data.has(path), `unexpected read: ${path}`)
+    return data.get(path)
+  }
+  return { paths, input: { repository: forkRepository, eventName: 'pull_request', event: { repository, pull_request: { number: 1 } }, read } }
+}
+
+test('fork policy validates actual native Issue metadata with read-only same-repository requests', async () => {
+  const fixture = forkFixture()
+  assert.deepEqual(await runForkNativePolicy(fixture.input), { eligible: true, checkedIssues: [2] })
+  assert.equal(fixture.paths.length, 4)
+  assert.ok(fixture.paths.every((path) => !path.includes('graphql')))
+})
+
+test('fork policy rejects cross-repository, hidden, and PR-only references', async () => {
+  for (const body of ['Refs other/repo#2', '<!-- Fixes #2 -->', '`Fixes #2`', '```\nFixes #2\n```', 'no reference']) {
+    const { input } = forkFixture({ pull: { body } })
+    await assert.rejects(runForkNativePolicy(input), /同仓库 Issue/)
+  }
+  const { input } = forkFixture({ issue: { pull_request: { url: 'pr' } } })
+  await assert.rejects(runForkNativePolicy(input), /同仓库 Issue/)
+})
+
+test('fork policy rejects missing or unreadable Issues instead of treating reads as exemptions', async () => {
+  const { input } = forkFixture({ pull: { body: 'Fixes #99' } })
+  await assert.rejects(runForkNativePolicy(input), /unexpected read/)
+  const fixture = forkFixture()
+  await assert.rejects(runForkNativePolicy({ ...fixture.input, read: async () => { throw new Error('403 denied') } }), /403 denied/)
+})
+
+test('fork policy keeps Type, area, label, and native state checks substantive', async () => {
+  for (const issue of [
+    { type: null }, { type: { name: 'Invented' } }, { labels: [] },
+    { labels: [{ name: 'area/hooks' }, { name: 'kind/feature' }] },
+    { labels: [{ name: 'area/hooks' }, { name: 'ci' }] },
+    { labels: [{ name: 'area/hooks' }, { name: 'p0' }, { name: 'p1' }] },
+    { state: 'unknown' }, { state: 'closed', state_reason: null },
+  ]) {
+    const { input } = forkFixture({ issue })
+    await assert.rejects(runForkNativePolicy(input), /#2:/)
+  }
+  for (const state_reason of ['completed', 'not_planned']) {
+    assert.deepEqual(validateNativeIssue({ ...nativeIssue(), state: 'closed', state_reason }), [])
+  }
+})
+
+test('fork policy retains PR kinds, areas, source restrictions, and explicit resolving Priority matching', async () => {
+  for (const labels of [[], ['kind/feature'], ['area/hooks'], ['kind/feature', 'kind/cleanup', 'area/hooks'], ['kind/feature', 'area/hooks', 'source/user']]) {
+    const { input } = forkFixture({ pull: { labels: labels.map((name) => ({ name })) } })
+    await assert.rejects(runForkNativePolicy(input))
+  }
+  const issue = { labels: [{ name: 'area/hooks' }, { name: 'p1' }] }
+  await assert.rejects(runForkNativePolicy(forkFixture({ issue }).input), /Priority/)
+  const pull = { labels: [{ name: 'kind/feature' }, { name: 'area/hooks' }, { name: 'p1' }] }
+  assert.equal((await runForkNativePolicy(forkFixture({ issue, pull }).input)).eligible, true)
+})
+
+test('fork policy preserves live draft, bot, and unrequested-review exemptions', async () => {
+  for (const options of [{ pull: { draft: true } }, { pull: { user: { type: 'Bot' } } }, { requests: { users: [], teams: [] } }]) {
+    const { input, paths } = forkFixture(options)
+    assert.deepEqual(await runForkNativePolicy(input), { eligible: false, checkedIssues: [] })
+    assert.ok(paths.every((path) => !path.includes('/issues/')))
+  }
+  const { input } = forkFixture({ requests: { users: [], teams: [] }, reviews: [{ state: 'CHANGES_REQUESTED' }] })
+  assert.equal((await runForkNativePolicy(input)).eligible, true)
+})
+
+test('fork lifecycle reads native state without mutating Project or Issue metadata', async () => {
+  const { input, paths } = forkFixture()
+  const event = { repository: input.event.repository, issue: { number: 2 } }
+  assert.deepEqual(await runForkNativePolicy({ ...input, eventName: 'issues', event }), { eligible: true, checkedIssues: [2] })
+  assert.deepEqual(paths, [`/repos/${forkRepository}/issues/2`])
+})
+
+test('fork policy rejects repository identity mismatch and unsupported event before any request', async () => {
+  const { input, paths } = forkFixture()
+  for (const repository of ['other/repo', '../unsafe', undefined]) {
+    await assert.rejects(runForkNativePolicy({ ...input, repository }), /repository identity/)
+  }
+  await assert.rejects(runForkNativePolicy({ ...input, event: { ...input.event, repository: { full_name: forkRepository, fork: false } } }), /repository identity/)
+  await assert.rejects(runForkNativePolicy({ ...input, eventName: 'push' }), /Unsupported/)
+  assert.deepEqual(paths, [])
 })

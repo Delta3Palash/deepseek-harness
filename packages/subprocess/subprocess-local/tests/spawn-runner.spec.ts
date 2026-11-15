@@ -569,6 +569,27 @@ describe('Linux one-shot exec bootstrap', () => {
     })
   })
 
+  it.each([undefined, true, false])('preserves shell-fallback policy %s in the private request', (allowShellFallback) => {
+    const request = { cwd: '/target', env: {}, ...allowShellFallback === undefined ? {} : { allowShellFallback } }
+    const files = track(createLinuxLaunchFiles(request))
+    expect(consumeLinuxLaunchRequest(files.requestPath)).toEqual(request)
+  })
+
+  it.each([null, 0, 'false', {}])('rejects nonboolean shell-fallback policy %j', (allowShellFallback) => {
+    const files = track(createLinuxLaunchFiles({ cwd: '/target', env: {} }))
+    writeFileSync(files.requestPath, JSON.stringify({ cwd: '/target', env: {}, allowShellFallback }))
+    expect(() => consumeLinuxLaunchRequest(files.requestPath)).toThrow('invalid Linux launch request')
+  })
+
+  it.each(['tool', '/absolute/tool'])('does not retry ENOEXEC through a shell when disabled for %s', async (program) => {
+    const files = track(createLinuxLaunchFiles({ cwd: '/work', env: { PATH: 'bin' }, allowShellFallback: false }))
+    const execve = vi.fn((_file: string): never => { throw Object.assign(new Error('exec format'), { code: 'ENOEXEC' }) })
+    await runSpawnRunner(files.requestPath, ['--', program], hostArgument(new FakeRunnerHost()), internals({ execve }))
+    expect(execve).toHaveBeenCalledOnce()
+    expect(execve.mock.calls[0]?.[0]).not.toBe('/bin/sh')
+    expect(readLinuxStartupError(files.startupErrorPath)).toMatchObject({ type: 'error', error: { code: 'ENOEXEC' } })
+  })
+
   it('uses the default PATH and stops on a non-search error', async () => {
     const files = track(createLinuxLaunchFiles({ cwd: '/work', env: {} }))
     const execve = vi.fn((_file: string) => {

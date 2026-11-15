@@ -142,7 +142,9 @@ jobs:
   serial-linux-selfhosted:
     if: github.event_name == 'push' && github.ref == 'refs/heads/master'
     name: serial / linux (self-hosted standby)
-    runs-on: [self-hosted, linux, x64, vm-backup]
+    runs-on: >-
+      ${{ github.event.repository.fork && 'ubuntu-24.04'
+          || fromJSON('["self-hosted", "linux", "x64", "vm-backup"]') }}
     steps:
       # DSH_ARCHIVE_BASE_REF below compares the frozen-archive gate against
       # github.event.before, so full history is required: depth 2 would miss it
@@ -175,7 +177,12 @@ jobs:
       # The persistent VM image owns Playwright's Linux system packages; this
       # step also proves that browser provisioning remains usable for failover.
       - name: Install Playwright Chromium and WebKit
+        if: ${{ !github.event.repository.fork }}
         run: pnpm --filter @deepseek-ai/dsh-web-frontend exec playwright install chromium webkit
+
+      - name: Install hosted Playwright browsers and system dependencies
+        if: github.event.repository.fork
+        run: pnpm --filter @deepseek-ai/dsh-web-frontend exec playwright install --with-deps chromium webkit
 
       - name: Prepare bubblewrap (unrestrict userns)
         run: bash scripts/prepare-ci-bubblewrap.sh
@@ -236,7 +243,9 @@ jobs:
   serial-windows:
     if: github.event_name == 'push' && github.ref == 'refs/heads/master'
     name: serial / windows (self-hosted standby)
-    runs-on: [self-hosted, dsh-win-ci, windows]
+    runs-on: >-
+      ${{ github.event.repository.fork && 'windows-2025'
+          || fromJSON('["self-hosted", "dsh-win-ci", "windows"]') }}
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v7.0.1

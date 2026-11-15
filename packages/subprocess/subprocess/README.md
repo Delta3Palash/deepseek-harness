@@ -9,7 +9,7 @@ English | [中文](README.zh.md)
 
 ## Summary
 
-`ctx.subprocess` resolves executables, starts explicitly specified child processes or real terminal sessions, streams or collects bounded output, and terminates the full managed process range. Configure one subprocess implementation for each composition, choosing local or remote execution according to where commands must run. Each request sets argv, working directory, stdio, environment overrides, termination grace, and cancellation, with no shell interpretation or hidden execution defaults. Child environments remove ambient credentials and `DSH_*` values before applying explicit overrides; callers own deadlines, teardown policy, and model-facing rendering, while collected output remains readable after exit.
+`ctx.subprocess` resolves executables, starts explicitly specified child processes or real terminal sessions, streams or collects bounded output, and terminates the full managed process range. Configure one subprocess implementation for each composition, choosing local or remote execution according to where commands must run. Each request sets argv, working directory, stdio, environment overrides, termination grace, and cancellation, with literal argv and documented shell-fallback defaults. Child environments remove ambient credentials and `DSH_*` values before applying explicit overrides; callers own deadlines, teardown policy, and model-facing rendering, while collected output remains readable after exit.
 
 ## Table of Contents
 
@@ -51,6 +51,10 @@ const handle = ctx.subprocess.spawn({
 const { exitCode, signal } = await handle.done
 const output = handle.collected.stdout?.readFrom(0)
 ```
+
+### Controlling executable-format fallback
+
+`allowShellFallback` applies to ordinary spawn requests. Omission or `true` retains the provider's existing behavior, which can retry an executable rejected with `ENOEXEC` through a shell. Set `false` when executable-format failure must reject without that implicit interpretation. A provider that cannot enforce the restriction must reject before target execution. This does not prohibit an explicit interpreter in `argv`, a kernel-recognized shebang, or a program launching its own interpreters. It does not authenticate binaries or change process-range ownership.
 
 ### Choosing how output is delivered
 
@@ -95,7 +99,7 @@ This section explains the design decisions behind the seam and points at the cod
 
 ### Design concept
 
-The seam is built on one separation: the service owns process coordinates and lifetime; consumers own what a process means and every default that shapes one. That is why the spawn request is fully explicit — no hidden subprocess-service default — and why `SubprocessOutcome` carries exit facts only: callers own deadlines, teardown ladders, and cause classification. The `dsh-shell` request/spec split is the owning template.
+The seam is built on one separation: the service owns process coordinates and lifetime; consumers own what a process means and every default that shapes one. Core spawn fields are required and optional behaviors have documented defaults. `SubprocessOutcome` carries exit facts only: callers own deadlines, teardown ladders, and cause classification. The `dsh-shell` request/spec split is the owning template.
 
 ### Source map
 
@@ -111,7 +115,7 @@ A spawn returns a live handle immediately without exposing target identity. `don
 
 ### Lifecycle and invariants
 
-One implementation registers per context; loading a second throws (Cordis standard). Disposal of the service terminates every still-running managed process and awaits its exit, so process lifetime survives consumer reloads. `argv` is never shell-interpreted; a consumer that wants a shell passes `['bash', '-c', command]` itself. Terminal allocation cancellation (the spec signal) is separate from the published handle's lifetime.
+One implementation registers per context; loading a second throws (Cordis standard). Disposal of the service terminates every still-running managed process and awaits its exit, so process lifetime survives consumer reloads. `argv` is passed as literal arguments; a consumer can explicitly select `['bash', '-c', command]`. The separate `allowShellFallback` policy controls implicit interpretation after an executable-format error. Terminal allocation cancellation (the spec signal) is separate from the published handle's lifetime.
 
 </details>
 

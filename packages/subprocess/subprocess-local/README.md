@@ -42,6 +42,12 @@ Absolute executable paths are verified; bare names resolve against the scrubbed 
 
 Windows ordinary subprocesses start the private Job runner with `windowsHide` and request hidden initial windows for native targets. Standard streams and Job ownership remain independent of window visibility; commands that explicitly create their own windows are outside this guarantee.
 
+### Refusing implicit shell fallback
+
+For ordinary spawns, `allowShellFallback: false` reports an executable-format error without retrying the file through a shell. Linux scoped launches carry the policy into their exec bootstrap. Detached Linux and macOS launches use the private libc `execve` bootstrap with the same process-group ownership, standard streams, optional fd 7, and startup-error reporting. Windows keeps its native process creation path. Other local platforms reject this policy before launching the target. Omission or `true` preserves existing launch behavior; terminal launches are unchanged.
+
+The policy does not forbid an explicit interpreter command or a kernel-recognized shebang, authenticate the target, or strengthen the existing fallback process-range visibility. A native executable consumer remains responsible for selecting a trusted, compatible binary.
+
 ### Collecting output
 
 Collect mode keeps the last `maxBytes` of a stream in memory — errors and final results cluster at the end — and, when a `spill` cap is configured, appends the complete stream to a private file under a per-process directory in the OS temp dir (a `0700` directory, `0600` random-named files). A stream larger than the spill cap discards its incomplete spill and returns only the marked truncated tail. Spilling is best-effort: when the spill file cannot be opened or appended (the per-process directory removed by a temporary-file cleaner, `EACCES`, `EMFILE`, `ENOSPC`), the collector discards the spill, logs one `error` through the plugin logger, and keeps collecting the in-memory tail, so the result is truncated with no spill path. Reads are offset-based and non-consuming, so background and batch readers coexist before and after exit.
@@ -93,11 +99,11 @@ Each spawn selects one owner for both signalling and quiescence. Supported Linux
 | [`src/spawn.ts`](src/spawn.ts) | Shared process plumbing: direct outcomes, tail-keep collection, spill files, and fallback spawning |
 | [`src/managed-owner.ts`](src/managed-owner.ts) | Private signal-and-wait owner used by each ordinary handle |
 | [`src/linux-scope.ts`](src/linux-scope.ts) | Linux user-systemd capability checks, scope launch, signalling, and quiescence |
-| [`src/linux-execve.ts`](src/linux-execve.ts) | Linux libc image replacement and inherited-standard-descriptor preservation |
+| [`src/linux-execve.ts`](src/linux-execve.ts) | POSIX libc image replacement and inherited-standard-descriptor preservation |
 | [`src/windows-job.ts`](src/windows-job.ts) | Windows Job capability checks and helper launch |
 | [`src/runner-launch.ts`](src/runner-launch.ts) | Source, built, and packaged private-runner selection |
-| [`src/spawn-runner.ts`](src/spawn-runner.ts) | Linux one-shot exec bootstrap and Windows Job runner |
-| [`src/runner-protocol.ts`](src/runner-protocol.ts) | Strict Linux launch/startup files and Windows IPC messages |
+| [`src/spawn-runner.ts`](src/spawn-runner.ts) | POSIX one-shot exec bootstrap and Windows Job runner |
+| [`src/runner-protocol.ts`](src/runner-protocol.ts) | Strict POSIX launch/startup files and Windows IPC messages |
 | [`src/terminal.ts`](src/terminal.ts) | `node-pty` handle: Linux scope attachment, foreground inspection, and fallback cleanup |
 | [`src/process-inspector.ts`](src/process-inspector.ts) | POSIX process-tree and session inspection |
 | [`src/windows-inspector.ts`](src/windows-inspector.ts) | Windows Toolhelp32 process-table inspection via koffi |

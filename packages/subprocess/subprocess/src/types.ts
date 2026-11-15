@@ -69,14 +69,21 @@ export interface SubprocessStdio {
 }
 
 /**
- * A fully-specified spawn request. This seam applies no defaults: every
- * disposition, limit, and directory is explicit, so the caller's own config —
- * not a hidden subprocess-service default — decides them (the `dsh-shell`
- * request/spec split is the owning template).
+ * A spawn request with explicit dispositions, limits, and directory. Optional
+ * environment, cancellation, and shell-fallback policy retain their documented
+ * defaults (the `dsh-shell` request/spec split is the owning template).
  */
 export interface SubprocessSpawnSpec {
-  /** Executable and arguments; `argv[0]` is the program. Never shell-interpreted here. */
+  /** Executable and literal arguments; `argv[0]` is the program. */
   argv: readonly string[]
+  /**
+   * Permit the platform's ENOEXEC shell retry for executable text files.
+   * Omission preserves the existing platform behavior. False requires an
+   * execution path with no implicit shell retry, or fails before target launch
+   * when the provider cannot supply one. Explicit interpreters and kernel
+   * shebang handling are unaffected; this is not native-file validation.
+   */
+  allowShellFallback?: boolean
   /** Working directory for the child. */
   cwd: string
   /** Per-stream stdio dispositions. */

@@ -1163,6 +1163,20 @@ describe('Linux PTY bootstrap reuse', () => {
 })
 
 describe('Linux ordinary launch adapters', () => {
+  it('propagates the no-shell policy into the contained bootstrap', async () => {
+    const child = new FakeChild()
+    childProcessMocks.spawn.mockReturnValue(child)
+    const result = launchLinuxScope({ ...spec(), allowShellFallback: false }, { TARGET: 'yes' }, [])
+    const options = childProcessMocks.spawn.mock.calls[0]?.[2] as { env?: NodeJS.ProcessEnv } | undefined
+    const requestPath = options?.env?.[SUBPROCESS_RUNNER_ENV]
+    if (requestPath === undefined) throw new Error('missing launch request')
+    directories.push(linuxLaunchFilesFromLocator(requestPath).directory)
+    expect(consumeLinuxLaunchRequest(requestPath).allowShellFallback).toBe(false)
+    child.exit(0, null)
+    await expect(result.direct).resolves.toEqual({ exitCode: 0, signal: null })
+    result.owner.cleanup?.()
+  })
+
   it('uses the default launch dependencies without changing the target request', async () => {
     const child = new FakeChild()
     childProcessMocks.spawn.mockReturnValue(child)

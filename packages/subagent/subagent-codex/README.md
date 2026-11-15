@@ -43,6 +43,7 @@ The layer inserts Host rows only, so any profile can select it, including the sh
 | `model` | native Codex settings | Optional non-empty model name fixed for every thread from this provider instance; omission sends no app-server override |
 | `env` | `{}` | Explicit child environment layered over the credential-scrubbed parent environment |
 | `permissionMode` | `never` | Native non-interactive approval and sandbox mode fixed for every thread from this provider instance |
+| `sandbox` | native Codex settings | Optional `read-only` restriction sent explicitly to `thread/start`; requires `permissionMode: never` |
 | `disposeGraceMs` | `3000` | Grace between the shared managed-range owner's termination tiers |
 
 | `permissionMode` value | `thread/start` fields | Native behavior |
@@ -52,6 +53,8 @@ The layer inserts Host rows only, so any profile can select it, including the sh
 | `dangerously-bypass-approvals-and-sandbox` | `approvalPolicy: never`, `sandbox: danger-full-access` | Skip approval and sandbox enforcement; this value must be selected explicitly |
 
 The generated [configuration catalog](../../../docs/config-catalog.md#deepseek-aidsh-subagent-codex) is the exhaustive source for every accepted field and its JSDoc. A configured `model` passes unchanged on each ephemeral `thread/start`; omission leaves native model selection in force. The provider does not discover models, rewrite aliases, select `modelProvider` or `serviceTier`, or set a fallback. Credential-shaped ambient variables are removed before the explicit `env` overlay, so an API key intended for the child must be supplied there.
+
+Set `sandbox: read-only` with `permissionMode: never` for review tasks. The adapter sends the restriction in the native thread request instead of relying on inherited Codex configuration. Combining it with either other permission mode fails before spawning. Omission preserves the existing permission-mode behavior. Native sandbox restrictions govern supported local tools; separately configured external tools still require deployment policy.
 
 <a id="exposing-the-tool"></a>
 ### Exposing the tool
@@ -75,6 +78,8 @@ The tool returns the child's name after accepting the task and sends its result 
 ### What you get
 
 The completion notice contains the selected Codex answer, or the stop reason and optional safe diagnostic. The parent Session also retains the external task identity and complete terminal result independently of the notice; no local child Session is created. Product reasoning, tool activity, raw stderr, and workspace diffs do not enter the parent Session.
+
+The adapter starts the pinned JavaScript wrapper with the current native Node executable and `allowShellFallback: false` on the shared subprocess request. The process provider must refuse executable-format errors without shell interpretation, or reject startup if it cannot enforce that policy. This covers the managed Node launch; the upstream wrapper owns its subsequent native payload launch.
 
 ### Failure and recovery
 

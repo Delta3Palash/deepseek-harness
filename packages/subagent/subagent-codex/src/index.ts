@@ -45,6 +45,8 @@ export interface Config {
   env?: Record<string, string>
   /** Native non-interactive permission mode fixed for this Provider instance. */
   permissionMode?: CodexPermissionMode
+  /** Explicit read-only native sandbox; requires permissionMode never. Omission preserves native defaults. */
+  sandbox?: 'read-only'
   /** Grace in milliseconds between app-server managed-range termination tiers. */
   disposeGraceMs?: number
 }
@@ -55,10 +57,11 @@ export const Config: z<Config> = z.object({
   env: z.dict(z.string()).default({}),
   permissionMode: z.union([...CODEX_PERMISSION_MODES])
     .default(DEFAULT_CODEX_PERMISSION_MODE),
+  sandbox: z.const('read-only'),
   disposeGraceMs: z.number().default(DEFAULT_DISPOSE_GRACE_MS),
 })
 
-type ResolvedConfig = Omit<Required<Config>, 'model'> & Pick<Config, 'model'>
+type ResolvedConfig = Omit<Required<Config>, 'model' | 'sandbox'> & Pick<Config, 'model' | 'sandbox'>
 
 class CodexProvider implements SubagentProvider {
   readonly capabilities: SubagentCapabilities = NO_START_CAPABILITIES
@@ -86,6 +89,7 @@ class CodexProvider implements SubagentProvider {
       cwd,
       ...this.config.model === undefined ? {} : { model: this.config.model },
       permissionMode: this.config.permissionMode,
+      ...this.config.sandbox === undefined ? {} : { sandbox: this.config.sandbox },
       env: this.config.env,
       disposeGraceMs: this.config.disposeGraceMs,
       spawn: spawnSpec => this.ctx.subprocess.spawn(spawnSpec),
@@ -110,7 +114,11 @@ export function apply(ctx: Context, config: Config): void {
     ...config.model === undefined ? {} : { model: config.model },
     env: config.env as Record<string, string>,
     permissionMode: config.permissionMode ?? DEFAULT_CODEX_PERMISSION_MODE,
+    ...config.sandbox === undefined ? {} : { sandbox: config.sandbox },
     disposeGraceMs: config.disposeGraceMs as number,
+  }
+  if (resolved.sandbox !== undefined && resolved.permissionMode !== 'never') {
+    throw new Error('subagent-codex: explicit read-only sandbox requires permissionMode never')
   }
   assertPositiveFinite(
     'subagent-codex',
