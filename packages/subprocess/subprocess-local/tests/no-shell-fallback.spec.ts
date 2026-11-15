@@ -1,6 +1,6 @@
 import { Buffer } from 'node:buffer'
-import { ChildProcess, type SpawnOptions } from 'node:child_process'
-import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { ChildProcess, spawnSync, type SpawnOptions } from 'node:child_process'
+import { chmodSync, existsSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { release, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, onTestFinished, vi } from 'vitest'
@@ -136,11 +136,21 @@ describe.skipIf(process.platform !== 'linux' && process.platform !== 'darwin')('
     }
   }, 20_000)
 
-  it.each([undefined, true])('preserves executable-text fallback with policy %s', async (allowShellFallback) => {
+  it.each([undefined, true])('preserves native executable-text behavior with policy %s', async (allowShellFallback) => {
     const directory = mkdtempSync(join(tmpdir(), 'dsh-shell-default-'))
+    onTestFinished(() => { rmSync(directory, { recursive: true, force: true }) })
     const file = join(directory, 'native-tool')
     writeFileSync(file, 'TEXT=x\nprintf shell-fallback-ran\n', { mode: 0o700 })
-    const handle = spawnSubprocess({ ...request([file], directory), ...allowShellFallback === undefined ? {} : { allowShellFallback } })
+    const spec = { ...request([file], directory), ...allowShellFallback === undefined ? {} : { allowShellFallback } }
+    if (process.platform === 'darwin') {
+      // Darwin's native spawn rejects this file; allowing a fallback does not
+      // require the provider to add a shell retry absent from the platform.
+      const baseline = spawnSync(file, [], { cwd: directory, stdio: 'ignore', timeout: 5_000 })
+      expect(baseline.error).toMatchObject({ code: 'ENOEXEC' })
+      expect(() => spawnSubprocess(spec)).toThrow(expect.objectContaining({ code: 'ENOEXEC' }))
+      return
+    }
+    const handle = spawnSubprocess(spec)
     try {
       await expect(handle.done).resolves.toEqual({ exitCode: 0, signal: null })
       await handle.waitForExit()
@@ -148,7 +158,6 @@ describe.skipIf(process.platform !== 'linux' && process.platform !== 'darwin')('
     } finally {
       handle.terminate()
       await handle.waitForExit()
-      rmSync(directory, { recursive: true, force: true })
     }
   })
 
@@ -161,7 +170,7 @@ describe.skipIf(process.platform !== 'linux' && process.platform !== 'darwin')('
     try {
       await expect(handle.done).resolves.toEqual({ exitCode: 0, signal: null })
       await handle.waitForExit()
-      expect(JSON.parse(handle.collected.stdout!.readFrom(0).text)).toEqual(['a;$b', directory, 'literal-value'])
+      expect(JSON.parse(handle.collected.stdout!.readFrom(0).text)).toEqual(['a;$b', realpathSync(directory), 'literal-value'])
     } finally {
       handle.terminate()
       await handle.waitForExit()
